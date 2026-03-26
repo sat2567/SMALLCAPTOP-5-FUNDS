@@ -1,7 +1,7 @@
 """
 SmallCap Fund Ranking App
 Dual-Engine Layout: Long-Term Compounders + Short-Term Momentum
-Uses real Nifty 500 TRI historical data as Benchmark
+Uses real Nifty 500 TRI Combined historical data as Benchmark
 """
 
 import streamlit as st
@@ -34,29 +34,21 @@ def load_data():
 
     # ── Real Nifty 500 TRI Benchmark Integration ──
     try:
-        # Load and combine the two uploaded benchmark files
-        b1 = pd.read_csv("Nifty 500 TRI Historical Data2.csv")
-        b2 = pd.read_csv("Nifty 500 TRI Historical Data (1).csv")
-        bench = pd.concat([b1, b2], ignore_index=True)
+        # Load the combined benchmark file directly
+        bench = pd.read_csv("Nifty_500_TRI_Combined.csv")
         
         # Clean the data
-        bench["Date"] = pd.to_datetime(bench["Date"], format="%d-%m-%Y")
-        bench["Price"] = bench["Price"].astype(str).str.replace(',', '').astype(float)
+        bench["Date"] = pd.to_datetime(bench["Date"])
         
-        # Sort, remove overlaps, and slice the exact requested date range
-        bench = bench.sort_values("Date").drop_duplicates(subset="Date")
-        bench = bench[(bench["Date"] >= "2008-01-01") & (bench["Date"] <= "2026-03-20")]
-        
-        # Rename and merge into our main NAV dataframe
-        bench = bench[["Date", "Price"]].rename(columns={"Price": "Benchmark"})
+        # Merge into our main NAV dataframe
         nav = pd.merge(nav, bench, on="Date", how="left")
         
         # Forward fill the benchmark to cover any mismatched market holidays
         nav["Benchmark"] = nav["Benchmark"].ffill()
         
     except Exception as e:
-        # Failsafe: If the CSVs are missing, revert to the Category Average proxy
-        st.sidebar.warning("⚠️ Could not load Nifty 500 files. Using Category Average as Benchmark.")
+        # Failsafe: If the CSV is missing, revert to the Category Average proxy
+        st.sidebar.warning("⚠️ Could not load Nifty_500_TRI_Combined.csv. Using Category Average as Benchmark.")
         valid = [f for f in fund_names if nav[f].notna().sum() > 252]
         nav["Benchmark"] = nav[valid].mean(axis=1)
 
