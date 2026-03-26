@@ -209,6 +209,7 @@ def compute_all(_nav, fund_names, aum_latest):
         results.append({
             "Fund": fund, "Track_Yrs": len(fd) / 252,
             "Roll_5Y": r5_mean, "Up_Cap": up_cap, "Down_Cap": down_cap,
+            "Cap_Ratio": (up_cap / down_cap if (up_cap and down_cap and down_cap != 0) else None),
             "Ulcer_Index": ulcer, "Max_DD": max_dd,
             "Ret_6M": ret_6m, "Ret_1Y": ret_1y, "Vol": vol,
             "Mom_6M_RA": mom_6m, "Mom_1Y_RA": mom_1y,
@@ -309,22 +310,46 @@ def main():
             disp = target.sort_values("Rank").copy()
 
             if "Established" in view:
-                cols = ["Rank", "Fund", "Score", "Up_Cap", "Down_Cap", "Ulcer_Index", "Roll_5Y", "AUM"]
-                names = ["Rank", "Fund", "Score", "Upside %", "Downside %", "DD Stress", "5Y CAGR", "AUM (Cr)"]
+                cols = ["Rank", "Fund", "Score", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "Roll_5Y", "AUM"]
+                names = ["Rank", "Fund", "Score", "Up Cap%", "Down Cap%", "Up/Down", "DD Stress", "5Y CAGR", "AUM (Cr)"]
             else:
-                cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "AUM"]
-                names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "AUM (Cr)"]
+                cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM"]
+                names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)"]
 
             disp = disp[cols].copy()
             disp.columns = names
             disp["Fund"] = disp["Fund"].apply(short)
 
-            num_cols = [c for c in names if c not in ("Rank", "Fund", "AUM (Cr)")]
+            num_cols = [c for c in names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down")]
+
+            def c_dc(val):
+                if pd.isna(val): return ""
+                if val < 50: return "color:#16a34a;font-weight:700;"
+                if val < 80: return "color:#16a34a;"
+                if val < 100: return "color:#ca8a04;"
+                return "color:#dc2626;font-weight:600;"
+
+            def c_uc(val):
+                if pd.isna(val): return ""
+                if val > 120: return "color:#16a34a;font-weight:700;"
+                if val > 100: return "color:#16a34a;"
+                return "color:#ca8a04;"
+
+            def c_cr(val):
+                if pd.isna(val): return ""
+                if val > 1.3: return "background-color:#dcfce7;color:#166534;font-weight:700;"
+                if val > 1.1: return "background-color:#e0f2fe;color:#075985;"
+                if val > 1.0: return "color:#ca8a04;"
+                return "background-color:#fecaca;color:#991b1b;"
 
             styled = (disp.style
                 .background_gradient(subset=["Score"], cmap="RdYlGn")
+                .map(c_dc, subset=["Down Cap%"])
+                .map(c_uc, subset=["Up Cap%"])
+                .map(c_cr, subset=["Up/Down"])
                 .format("{:.0f}", subset=["Rank"])
                 .format("{:.1f}", subset=num_cols)
+                .format("{:.2f}", subset=["Up/Down"])
                 .format("{:.0f}", subset=["AUM (Cr)"])
                 .format(na_rep="—")
             )
