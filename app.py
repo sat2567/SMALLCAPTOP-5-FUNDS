@@ -365,7 +365,7 @@ def main():
     # ═══════════════════════════════════
     if has_sectors:
         with tab_sector:
-            st.markdown("## Fund Strategy Profiles & Sector Flow")
+            st.markdown("## Quality Smallcap Funds")
 
             # ── Complete Strategy Table ──
             st.markdown("#### All Fund Profiles at a Glance")
