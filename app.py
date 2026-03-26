@@ -265,7 +265,7 @@ def main():
         has_sectors = False
 
     st.title("🚀 SmallCap Dual-Engine")
-    st.caption(f"Benchmark: {b_name} · Data through {nav['Date'].max().strftime('%d %b %Y')}")
+
 
     # Sidebar
     with st.sidebar:
@@ -354,8 +354,6 @@ def main():
                     "PE": info_p.get("PE"),
                     "PB": info_p.get("PB"),
                     "Valuation Stance": info_p.get("Stance", ""),
-                    "Strategy": info_p.get("Label", ""),
-                    "What The Fund Is Doing": info_p.get("Detail", ""),
                 })
 
             pdf = pd.DataFrame(profile_rows)
@@ -388,7 +386,6 @@ def main():
                 .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
                 .set_properties(**{"text-align": "center", "font-size": "13px"})
                 .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
-                .set_properties(subset=["Strategy", "What The Fund Is Doing"], **{"text-align": "left", "font-size": "12px"})
             )
             st.dataframe(styled_p, use_container_width=True, height=420, hide_index=True)
 
@@ -419,8 +416,6 @@ def main():
             c2.metric("PE Ratio", f"{info.get('PE', '—')}x")
             c3.metric("PB Ratio", f"{info.get('PB', '—')}x")
             c4.metric("Stance", info.get("Stance", "—"))
-
-            st.info(f"**{info.get('Label', '')}** — {info.get('Detail', '')}")
 
             # Significant sectors only
             fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
@@ -562,7 +557,6 @@ def main():
                 cons.append({
                     "Sector": sector, "Avg Alloc%": round(avg_a, 1), "Funds": cnt,
                     "Avg 12M Change": round(avg_c, 1), "Direction": direction,
-                    "Reading": SECTOR_READINGS.get(sector, f"Position across {cnt} funds."),
                 })
 
             cdf = pd.DataFrame(cons)
@@ -612,8 +606,7 @@ def main():
                 .map(c_ch, subset=["Avg 12M Change"])
                 .format(na_rep="—")
                 .set_properties(**{"text-align": "center", "font-size": "13px"})
-                .set_properties(subset=["Sector", "Reading"], **{"text-align": "left"})
-                .set_properties(subset=["Sector"], **{"font-weight": "600"})
+                .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
             )
             st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
 
