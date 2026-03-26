@@ -39,6 +39,9 @@ PROVEN = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare at 21.8% — highest single-sector bet of ANY fund (+6.6pp). Retailing 9.4%. Banking +8pp. Betting on India's structural consumption story. Highest PE (39.5x)."},
+    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
+        "Label": "Diversified Multi-Sector",
+        "Detail": "Healthcare 14.8%, autos 8.1%, finance 7.9%, iron & steel 6.9%, banking 7%. Broad-based exposure across manufacturing, healthcare, and financials with no extreme concentration."},
 }
 
 MOMENTUM_INFO = {
@@ -60,6 +63,9 @@ MOMENTUM_INFO = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare 21.8%, Retailing 9.4%, Banking +8pp. Structural consumption conviction."},
+    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
+        "Label": "Diversified Multi-Sector",
+        "Detail": "Healthcare 14.8%, autos 8.1%, iron & steel 6.9%. Balanced across manufacturing and services."},
 }
 
 ALL_INFO = {**PROVEN, **MOMENTUM_INFO}
@@ -178,6 +184,8 @@ def compute_all(_nav, fund_names, aum_latest):
         mn = fd.set_index("Date")[fund].resample("ME").last().dropna()
         cagrs_5y = [((mn.iloc[i] / mn.iloc[i - 60]) ** (1 / 5) - 1) * 100 for i in range(60, len(mn))]
         r5_mean = np.mean(cagrs_5y) if cagrs_5y else None
+        cagrs_3y = [((mn.iloc[i] / mn.iloc[i - 36]) ** (1 / 3) - 1) * 100 for i in range(36, len(mn))]
+        r3_mean = np.mean(cagrs_3y) if cagrs_3y else None
 
         up_m = brc[brc > 0]
         dn_m = brc[brc < 0]
@@ -208,7 +216,7 @@ def compute_all(_nav, fund_names, aum_latest):
 
         results.append({
             "Fund": fund, "Track_Yrs": len(fd) / 252,
-            "Roll_5Y": r5_mean, "Up_Cap": up_cap, "Down_Cap": down_cap,
+            "Roll_3Y": r3_mean, "Roll_5Y": r5_mean, "Up_Cap": up_cap, "Down_Cap": down_cap,
             "Cap_Ratio": (up_cap / down_cap if (up_cap and down_cap and down_cap != 0) else None),
             "Ulcer_Index": ulcer, "Max_DD": max_dd,
             "Ret_6M": ret_6m, "Ret_1Y": ret_1y, "Vol": vol,
@@ -234,12 +242,14 @@ def pctrank(s, asc=True):
 def rank_funds(df, w_est, w_mom):
     est = df[df["Track_Yrs"] >= 3].copy()
     if not est.empty:
+        est["S_R3"] = pctrank(est["Roll_3Y"])
         est["S_R5"] = pctrank(est["Roll_5Y"])
         est["S_UC"] = pctrank(est["Up_Cap"])
         est["S_DC"] = pctrank(est["Down_Cap"], False)
         est["S_UI"] = pctrank(est["Ulcer_Index"], False)
-        est["Score"] = (est["S_R5"].fillna(0) * w_est[0] + est["S_UC"].fillna(0) * w_est[1] +
-                        est["S_DC"].fillna(0) * w_est[2] + est["S_UI"].fillna(0) * w_est[3]) / sum(w_est)
+        est["Score"] = (est["S_R3"].fillna(0) * w_est[0] + est["S_R5"].fillna(0) * w_est[1] +
+                        est["S_UC"].fillna(0) * w_est[2] + est["S_DC"].fillna(0) * w_est[3] +
+                        est["S_UI"].fillna(0) * w_est[4]) / sum(w_est)
         est["Rank"] = est["Score"].rank(ascending=False, method="min")
 
     mom = df[df["Mom_6M_RA"].notna()].copy()
@@ -271,17 +281,18 @@ def main():
     # Sidebar
     with st.sidebar:
         st.subheader("🏛️ Compounder Weights")
-        w_cagr = st.slider("5Y Rolling CAGR", 0, 100, 30)
-        w_up = st.slider("Upside Capture", 0, 100, 20)
-        w_down = st.slider("Downside Capture", 0, 100, 30)
-        w_ulcer = st.slider("Ulcer Index", 0, 100, 20)
+        w_cagr3 = st.slider("3Y Rolling CAGR", 0, 100, 20)
+        w_cagr5 = st.slider("5Y Rolling CAGR", 0, 100, 25)
+        w_up = st.slider("Upside Capture", 0, 100, 15)
+        w_down = st.slider("Downside Capture", 0, 100, 25)
+        w_ulcer = st.slider("Ulcer Index", 0, 100, 15)
 
         st.divider()
         st.subheader("🏎️ Momentum Weights")
         m6 = st.slider("6M Dampened RA", 0, 100, 50)
         m1 = st.slider("1Y Dampened RA", 0, 100, 50)
 
-    est, mom = rank_funds(df_raw, [w_cagr, w_up, w_down, w_ulcer], [m6, m1])
+    est, mom = rank_funds(df_raw, [w_cagr3, w_cagr5, w_up, w_down, w_ulcer], [m6, m1])
 
     # ── Tabs ──
     if has_sectors:
@@ -310,8 +321,8 @@ def main():
             disp = target.sort_values("Rank").copy()
 
             if "Established" in view:
-                cols = ["Rank", "Fund", "Score", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "Roll_5Y", "AUM"]
-                names = ["Rank", "Fund", "Score", "Up Cap%", "Down Cap%", "Up/Down", "DD Stress", "5Y CAGR", "AUM (Cr)"]
+                cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "AUM"]
+                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "DD Stress", "AUM (Cr)"]
             else:
                 cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM"]
                 names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)"]
