@@ -335,8 +335,69 @@ def main():
     # ═══════════════════════════════════
     if has_sectors:
         with tab_sector:
-            st.markdown("## Fund Sector Flow")
-            st.markdown("Select a fund to see how its sector allocations shifted month by month.")
+            st.markdown("## Fund Strategy Profiles & Sector Flow")
+
+            # ── Complete Strategy Table ──
+            st.markdown("#### All Fund Profiles at a Glance")
+
+            profile_rows = []
+            for fund in ALL_QUAL_FUNDS:
+                info_p = ALL_INFO.get(fund, {})
+                tags = []
+                if fund in PROVEN:
+                    tags.append("🏛️ Compounder")
+                if fund in MOMENTUM_INFO:
+                    tags.append("🏎️ Momentum")
+                profile_rows.append({
+                    "Fund": short(fund),
+                    "Category": " + ".join(tags),
+                    "PE": info_p.get("PE"),
+                    "PB": info_p.get("PB"),
+                    "Valuation Stance": info_p.get("Stance", ""),
+                    "Strategy": info_p.get("Label", ""),
+                    "What The Fund Is Doing": info_p.get("Detail", ""),
+                })
+
+            pdf = pd.DataFrame(profile_rows)
+
+            def c_pe(val):
+                if pd.isna(val): return ""
+                if val < 25: return "background-color:#dcfce7;color:#166534;font-weight:600;"
+                if val < 32: return "background-color:#fef9c3;color:#854d0e;"
+                return "background-color:#fecaca;color:#991b1b;font-weight:600;"
+
+            def c_pb(val):
+                if pd.isna(val): return ""
+                if val < 3: return "background-color:#dcfce7;color:#166534;font-weight:600;"
+                if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
+                return "background-color:#fecaca;color:#991b1b;"
+
+            def c_cat(val):
+                if "Compounder" in str(val) and "Momentum" in str(val):
+                    return "background-color:#ede9fe;color:#5b21b6;"
+                if "Compounder" in str(val):
+                    return "background-color:#dcfce7;color:#166534;"
+                if "Momentum" in str(val):
+                    return "background-color:#e0f2fe;color:#075985;"
+                return ""
+
+            styled_p = (pdf.style
+                .map(c_pe, subset=["PE"])
+                .map(c_pb, subset=["PB"])
+                .map(c_cat, subset=["Category"])
+                .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
+                .set_properties(**{"text-align": "center", "font-size": "13px"})
+                .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
+                .set_properties(subset=["Strategy", "What The Fund Is Doing"], **{"text-align": "left", "font-size": "12px"})
+            )
+            st.dataframe(styled_p, use_container_width=True, height=420, hide_index=True)
+
+            st.caption("PE color: 🟢 Value (<25x) · 🟡 Growth (25-32x) · 🔴 Premium (>32x)  |  PB color: 🟢 <3x · 🟡 3-4.2x · 🔴 >4.2x")
+
+            st.divider()
+
+            # ── Fund Dropdown ──
+            st.markdown("#### Sector Flow — Pick a Fund")
 
             selected = st.selectbox("Select Fund", ALL_QUAL_FUNDS, format_func=short)
 
