@@ -90,6 +90,9 @@ def compute_metrics(_nav, fund_names, aum_latest, df_er):
         b_ret = bench_ret.loc[common_idx]
 
         daily_fd = fd.set_index("Date")[fund]
+        
+        # ── Track Record (Age in Years) ──
+        track_record_years = len(fd) / 252
 
         # ── Rolling CAGR ──
         def rolling_cagr(series, years, window_months):
@@ -175,22 +178,33 @@ def compute_metrics(_nav, fund_names, aum_latest, df_er):
         te = active.std() * np.sqrt(12)
         info_ratio = (active.mean() * 12) / te if te > 0 else None
 
-        # ── 1Y return ──
+        # ── 1Y & 6M return (MOMENTUM) ──
         latest_nav = fd.iloc[-1][fund]
         ld = fd.iloc[-1]["Date"]
+        
+        # 1Y
         mask_12m = (nav["Date"] >= ld - timedelta(days=375)) & (nav["Date"] <= ld - timedelta(days=355))
         n12 = nav[mask_12m].dropna(subset=[fund])
         ret_1y = None
         if len(n12) > 0:
             nav_12m = n12.iloc[(n12["Date"] - (ld - timedelta(days=365))).abs().argsort().iloc[0]][fund]
             ret_1y = (latest_nav / nav_12m - 1) * 100
+            
+        # 6M
+        mask_6m = (nav["Date"] >= ld - timedelta(days=195)) & (nav["Date"] <= ld - timedelta(days=165))
+        n6 = nav[mask_6m].dropna(subset=[fund])
+        ret_6m = None
+        if len(n6) > 0:
+            nav_6m = n6.iloc[(n6["Date"] - (ld - timedelta(days=180))).abs().argsort().iloc[0]][fund]
+            ret_6m = (latest_nav / nav_6m - 1) * 100
 
         # ── Volatility ──
         rec_1y = fd[fd["Date"] >= ld - timedelta(days=365)]
         vol_1y = rec_1y[fund].pct_change().dropna().std() * np.sqrt(252) * 100 if len(rec_1y) > 50 else None
 
         results.append({
-            "Fund": fund, "Ret_1Y": ret_1y,
+            "Fund": fund, "Track_Record_Years": track_record_years,
+            "Ret_6M": ret_6m, "Ret_1Y": ret_1y,
             "Roll_3Y_Mean": r3_mean, "Roll_3Y_Median": r3_med,
             "Roll_3Y_Min": r3_min, "Roll_3Y_Max": r3_max, "Win_3Y": win_3y,
             "Roll_5Y_Mean": r5_mean, "Roll_5Y_Median": r5_med,
@@ -220,33 +234,67 @@ def pctrank(s, asc=True):
     return out
 
 
-def rank_funds(df, w):
-    d = df.copy()
-    d["S_R3"] = pctrank(d["Roll_3Y_Mean"])
-    d["S_R5"] = pctrank(d["Roll_5Y_Mean"])
-    d["S_W3"] = pctrank(d["Win_3Y"])
-    d["S_DC"] = pctrank(d["Down_Cap"], asc=False)
-    d["S_UC"] = pctrank(d["Up_Cap"])
-    d["S_SO"] = pctrank(d["Sortino"])
-    d["S_DD"] = pctrank(d["Max_DD"])
-    d["S_CA"] = pctrank(d["Calmar"])
-    d["S_IR"] = pctrank(d["Info_Ratio"])
-    d["S_ER"] = pctrank(d["ER"], asc=False)
+def rank_funds(df, mode, w, min_age):
+    # Apply Age Filter first
+    d = df[df["Track_Record_Years"] >= min_age].copy()
+    
+    if d.empty:
+        return d
+        
+    if mode == "Momentum":
+        d["S_6M"] = pctrank(d["Ret_6M"])
+        d["S_1Y"] = pctrank(d["Ret_1Y"])
+        
+        wt_6m, wt_1y = w[0], w[1]
+        
+        def comp_mom(row):
+            tw = wt_6m + wt_1y
+            if tw == 0: return np.nan
+            ts = 0
+            has_6m = pd.notna(row.get("S_6M"))
+            has_1y = pd.notna(row.get("S_1Y"))
+            
+            if has_6m: ts += row["S_6M"] * wt_6m
+            if has_1y: ts += row["S_1Y"] * wt_1y
+            
+            # Penalty for missing momentum data
+            data_completeness = ((wt_6m if has_6m else 0) + (wt_1y if has_1y else 0)) / tw
+            return (ts / tw) * np.sqrt(data_completeness) if data_completeness > 0 else np.nan
+            
+        d["Score"] = d.apply(comp_mom, axis=1)
+        
+    else:
+        # Comprehensive Mode
+        d["S_R3"] = pctrank(d["Roll_3Y_Mean"])
+        d["S_R5"] = pctrank(d["Roll_5Y_Mean"])
+        d["S_W3"] = pctrank(d["Win_3Y"])
+        d["S_DC"] = pctrank(d["Down_Cap"], asc=False)
+        d["S_UC"] = pctrank(d["Up_Cap"])
+        d["S_SO"] = pctrank(d["Sortino"])
+        d["S_DD"] = pctrank(d["Max_DD"])
+        d["S_CA"] = pctrank(d["Calmar"])
+        d["S_IR"] = pctrank(d["Info_Ratio"])
+        d["S_ER"] = pctrank(d["ER"], asc=False)
 
-    wm = {
-        "S_R3": w[0], "S_R5": w[1], "S_W3": w[2], "S_DC": w[3], "S_UC": w[4],
-        "S_SO": w[5], "S_DD": w[6], "S_CA": w[7], "S_IR": w[8], "S_ER": w[9],
-    }
+        wm = {
+            "S_R3": w[0], "S_R5": w[1], "S_W3": w[2], "S_DC": w[3], "S_UC": w[4],
+            "S_SO": w[5], "S_DD": w[6], "S_CA": w[7], "S_IR": w[8], "S_ER": w[9],
+        }
 
-    def comp(row):
-        tw = ts = 0
-        for c, wt in wm.items():
-            if wt > 0 and pd.notna(row.get(c)):
-                ts += row[c] * wt
-                tw += wt
-        return ts / tw if tw > 0 else np.nan
+        def comp_comp(row):
+            tw = ts = 0
+            total_possible_wt = sum(wm.values())
+            for c, wt in wm.items():
+                if wt > 0 and pd.notna(row.get(c)):
+                    ts += row[c] * wt
+                    tw += wt
+            
+            if tw == 0: return np.nan
+            data_completeness = tw / total_possible_wt
+            return (ts / tw) * np.sqrt(data_completeness)
 
-    d["Score"] = d.apply(comp, axis=1)
+        d["Score"] = d.apply(comp_comp, axis=1)
+        
     d["Rank"] = d["Score"].rank(ascending=False, method="min").astype(int)
     d = d.sort_values("Rank").reset_index(drop=True)
     d["Signal"] = d["Score"].apply(
@@ -265,322 +313,236 @@ def short(f):
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
-nav, fund_names, aum_latest, df_er = load_data()
-df_raw = compute_metrics(nav, fund_names, aum_latest, df_er)
+def main():
+    nav, fund_names, aum_latest, df_er = load_data()
+    df_raw = compute_metrics(nav, fund_names, aum_latest, df_er)
 
-st.title("📊 SmallCap Fund Rankings")
-st.caption(f"{len(df_raw)} funds · Data through {nav['Date'].max().strftime('%d %b %Y')} · Benchmark: Equal-weight proxy")
+    st.title("📊 SmallCap Fund Rankings")
+    st.caption(f"{len(df_raw)} funds · Data through {nav['Date'].max().strftime('%d %b %Y')} · Benchmark: Equal-weight proxy")
 
-# ── Sidebar weights ──
-with st.sidebar:
-    st.header("Factor Weights")
-    st.caption("Drag sliders to change how much each factor matters. Weights auto-normalise.")
-    w0 = st.slider("Rolling 3Y CAGR", 0, 30, 15)
-    w1 = st.slider("Rolling 5Y CAGR", 0, 30, 15)
-    w2 = st.slider("3Y Win Rate vs Benchmark", 0, 20, 5)
-    w3 = st.slider("Downside Capture", 0, 30, 20)
-    w4 = st.slider("Upside Capture", 0, 20, 10)
-    w5 = st.slider("Sortino Ratio", 0, 25, 15)
-    w6 = st.slider("Max Drawdown", 0, 20, 10)
-    w7 = st.slider("Calmar Ratio", 0, 15, 5)
-    w8 = st.slider("Information Ratio", 0, 15, 3)
-    w9 = st.slider("Expense Ratio", 0, 15, 2)
+    # ── Sidebar weights & modes ──
+    with st.sidebar:
+        st.header("Ranking Engine")
+        ranking_mode = st.radio("Methodology", ["Comprehensive", "Momentum"], 
+                                help="Comprehensive uses fundamentals & risk. Momentum ranks purely on price velocity.")
+        
+        st.divider()
+        st.header("Filters")
+        # Default to 1 year for Momentum so we can actually see the 1Y momentum
+        default_age = 1.0 if ranking_mode == "Momentum" else 3.0
+        min_age = st.slider("Min Track Record (Years)", 0.5, 10.0, default_age, 0.5)
+        
+        st.divider()
+        st.header("Factor Weights")
+        
+        if ranking_mode == "Momentum":
+            st.caption("Weighting for Momentum indicators.")
+            w_6m = st.slider("6-Month Momentum", 0, 100, 40)
+            w_1y = st.slider("1-Year Momentum", 0, 100, 60)
+            
+            total = w_6m + w_1y
+            if total == 0: total = 1
+            weights = [x / total for x in [w_6m, w_1y]]
+            
+        else:
+            st.caption("Drag sliders to change how much each factor matters. Weights auto-normalise.")
+            w0 = st.slider("Rolling 3Y CAGR", 0, 30, 15)
+            w1 = st.slider("Rolling 5Y CAGR", 0, 30, 15)
+            w2 = st.slider("3Y Win Rate vs Benchmark", 0, 20, 5)
+            w3 = st.slider("Downside Capture", 0, 30, 20)
+            w4 = st.slider("Upside Capture", 0, 20, 10)
+            w5 = st.slider("Sortino Ratio", 0, 25, 15)
+            w6 = st.slider("Max Drawdown", 0, 20, 10)
+            w7 = st.slider("Calmar Ratio", 0, 15, 5)
+            w8 = st.slider("Information Ratio", 0, 15, 3)
+            w9 = st.slider("Expense Ratio", 0, 15, 2)
 
-    total = w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9
-    if total == 0:
-        total = 1
-    weights = [x / total for x in [w0, w1, w2, w3, w4, w5, w6, w7, w8, w9]]
+            total = w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9
+            if total == 0: total = 1
+            weights = [x / total for x in [w0, w1, w2, w3, w4, w5, w6, w7, w8, w9]]
 
-df = rank_funds(df_raw, weights)
+    df = rank_funds(df_raw, ranking_mode, weights, min_age)
 
-# ── Two tabs ──
-tab_rank, tab_fund = st.tabs(["🏆 Rankings", "🔎 Fund Deep-Dive"])
+    if df.empty:
+        st.warning("No funds match the current filter criteria.")
+        return
 
-# ═══════════════════════════════════════════
-# TAB 1: RANKINGS
-# ═══════════════════════════════════════════
-with tab_rank:
-    # Top-line numbers
-    c1, c2, c3, c4 = st.columns(4)
-    top = df.iloc[0]
-    c1.metric("🥇 Top Fund", short(top["Fund"]), f"Score {top['Score']:.1f}")
-    c2.metric("Median Downside Capture", f"{df['Down_Cap'].median():.0f}%")
-    c3.metric("Median Sortino", f"{df['Sortino'].median():.2f}")
-    c4.metric("Median Max Drawdown", f"{df['Max_DD'].median():.1f}%")
+    # ── Two tabs ──
+    tab_rank, tab_fund = st.tabs(["🏆 Rankings", "🔎 Fund Deep-Dive"])
 
-    st.divider()
+    # ═══════════════════════════════════════════
+    # TAB 1: RANKINGS
+    # ═══════════════════════════════════════════
+    with tab_rank:
+        # Top-line numbers
+        c1, c2, c3, c4 = st.columns(4)
+        top = df.iloc[0]
+        c1.metric("🥇 Top Fund", short(top["Fund"]), f"Score {top['Score']:.1f}")
+        
+        if ranking_mode == "Momentum":
+            c2.metric("Median 6M Return", f"{df['Ret_6M'].median():.1f}%")
+            c3.metric("Median 1Y Return", f"{df['Ret_1Y'].median():.1f}%")
+            c4.metric("Funds Analyzed", len(df))
+        else:
+            c2.metric("Median Downside Capture", f"{df['Down_Cap'].median():.0f}%")
+            c3.metric("Median Sortino", f"{df['Sortino'].median():.2f}")
+            c4.metric("Median Max Drawdown", f"{df['Max_DD'].median():.1f}%")
 
-    # Build display table
-    display = df[[
-        "Rank", "Fund", "Score", "Signal",
-        "Roll_3Y_Mean", "Roll_5Y_Mean", "Win_3Y",
-        "Down_Cap", "Up_Cap", "Cap_Ratio",
-        "Sortino", "Max_DD", "Calmar",
-        "AUM", "ER",
-    ]].copy()
+        st.divider()
 
-    display.columns = [
-        "Rank", "Fund", "Score", "Signal",
-        "Roll 3Y%", "Roll 5Y%", "Win Rate 3Y%",
-        "Down Cap%", "Up Cap%", "Cap Ratio",
-        "Sortino", "Max DD%", "Calmar",
-        "AUM (Cr)", "Exp Ratio%",
-    ]
+        # Build display table dynamically based on mode
+        if ranking_mode == "Momentum":
+            display = df[[
+                "Rank", "Fund", "Score", "Signal", "Track_Record_Years",
+                "Ret_6M", "Ret_1Y", "Roll_3Y_Mean", "Max_DD", "AUM", "ER"
+            ]].copy()
+            display.columns = [
+                "Rank", "Fund", "Score", "Signal", "Age (Yrs)",
+                "6M Ret%", "1Y Ret%", "Roll 3Y%", "Max DD%", "AUM (Cr)", "Exp Ratio%"
+            ]
+            round_dict = {"Score": 1, "Age (Yrs)": 1, "6M Ret%": 1, "1Y Ret%": 1, "Roll 3Y%": 1, "Max DD%": 1, "AUM (Cr)": 0, "Exp Ratio%": 2}
+        else:
+            display = df[[
+                "Rank", "Fund", "Score", "Signal", "Track_Record_Years",
+                "Ret_1Y", "Roll_3Y_Mean", "Roll_5Y_Mean", "Win_3Y",
+                "Down_Cap", "Up_Cap", "Sortino", "Max_DD", "AUM", "ER",
+            ]].copy()
+            display.columns = [
+                "Rank", "Fund", "Score", "Signal", "Age (Yrs)",
+                "1Y Ret%", "Roll 3Y%", "Roll 5Y%", "Win Rate 3Y%",
+                "Down Cap%", "Up Cap%", "Sortino", "Max DD%", "AUM (Cr)", "Exp Ratio%",
+            ]
+            round_dict = {"Score": 1, "Age (Yrs)": 1, "1Y Ret%": 1, "Roll 3Y%": 1, "Roll 5Y%": 1, "Win Rate 3Y%": 1, "Down Cap%": 0, "Up Cap%": 0, "Sortino": 2, "Max DD%": 1, "AUM (Cr)": 0, "Exp Ratio%": 2}
 
-    display["Fund"] = display["Fund"].apply(short)
+        display["Fund"] = display["Fund"].apply(short)
 
-    # Round
-    for c in display.columns:
-        if c in ("Rank", "Fund", "Signal"):
-            continue
-        display[c] = pd.to_numeric(display[c], errors="coerce")
+        # Round
+        for c in display.columns:
+            if c in ("Rank", "Fund", "Signal"):
+                continue
+            display[c] = pd.to_numeric(display[c], errors="coerce")
 
-    display = display.round({
-        "Score": 1, "Roll 3Y%": 1, "Roll 5Y%": 1, "Win Rate 3Y%": 1,
-        "Down Cap%": 0, "Up Cap%": 0, "Cap Ratio": 2,
-        "Sortino": 2, "Max DD%": 1, "Calmar": 2,
-        "AUM (Cr)": 0, "Exp Ratio%": 2,
-    })
+        display = display.round(round_dict)
 
-    # Color the signal column
-    def color_signal(val):
-        colors = {
-            "Elite": "background-color: #dcfce7; color: #166534;",
-            "Strong": "background-color: #e0f2fe; color: #075985;",
-            "Above Avg": "background-color: #fef9c3; color: #854d0e;",
-            "Average": "background-color: #fed7aa; color: #9a3412;",
-            "Below Avg": "background-color: #fecaca; color: #991b1b;",
-        }
-        return colors.get(val, "")
+        # Color the signal column
+        def color_signal(val):
+            colors = {
+                "Elite": "background-color: #dcfce7; color: #166534;",
+                "Strong": "background-color: #e0f2fe; color: #075985;",
+                "Above Avg": "background-color: #fef9c3; color: #854d0e;",
+                "Average": "background-color: #fed7aa; color: #9a3412;",
+                "Below Avg": "background-color: #fecaca; color: #991b1b;",
+            }
+            return colors.get(val, "")
 
-    def color_down_cap(val):
-        if pd.isna(val): return ""
-        if val < 80: return "color: #16a34a; font-weight: 600;"
-        if val < 100: return "color: #ca8a04;"
-        return "color: #dc2626; font-weight: 600;"
+        def color_score(val):
+            if pd.isna(val): return ""
+            if val >= 70: return "background-color: #dcfce7; font-weight: 700;"
+            if val >= 50: return "background-color: #e0f2fe;"
+            if val >= 35: return "background-color: #fef9c3;"
+            return "background-color: #fecaca;"
+            
+        def color_momentum(val):
+            if pd.isna(val): return ""
+            if val > 30: return "color: #16a34a; font-weight: 600;"
+            if val > 10: return "color: #ca8a04;"
+            return "color: #dc2626;"
 
-    def color_up_cap(val):
-        if pd.isna(val): return ""
-        if val > 100: return "color: #16a34a; font-weight: 600;"
-        return "color: #ca8a04;"
+        # Apply styles dynamically
+        styled = display.style.map(color_signal, subset=["Signal"]) \
+            .map(color_score, subset=["Score"])
+            
+        if ranking_mode == "Momentum":
+            styled = styled.map(color_momentum, subset=["6M Ret%", "1Y Ret%"])
+            
+        styled = styled.format(na_rep="—") \
+            .set_properties(**{"text-align": "center", "font-size": "13px"}) \
+            .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "500"})
 
-    def color_sortino(val):
-        if pd.isna(val): return ""
-        if val > 0.15: return "color: #16a34a;"
-        if val > 0: return "color: #ca8a04;"
-        return "color: #dc2626;"
+        st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
 
-    def color_dd(val):
-        if pd.isna(val): return ""
-        if val > -40: return "color: #16a34a;"
-        if val > -55: return "color: #ca8a04;"
-        return "color: #dc2626; font-weight: 600;"
-
-    def color_score(val):
-        if pd.isna(val): return ""
-        if val >= 70: return "background-color: #dcfce7; font-weight: 700;"
-        if val >= 50: return "background-color: #e0f2fe;"
-        if val >= 35: return "background-color: #fef9c3;"
-        return "background-color: #fecaca;"
-
-    styled = display.style.applymap(color_signal, subset=["Signal"]) \
-        .applymap(color_down_cap, subset=["Down Cap%"]) \
-        .applymap(color_up_cap, subset=["Up Cap%"]) \
-        .applymap(color_sortino, subset=["Sortino"]) \
-        .applymap(color_dd, subset=["Max DD%"]) \
-        .applymap(color_score, subset=["Score"]) \
-        .format(na_rep="—") \
-        .set_properties(**{"text-align": "center", "font-size": "13px"}) \
-        .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "500"})
-
-    st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
-
-    # Download
-    buf = io.BytesIO()
-    display.to_excel(buf, index=False, engine="openpyxl")
-    st.download_button("📥 Download Rankings", buf.getvalue(),
-                       "smallcap_rankings.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        # Download
+        buf = io.BytesIO()
+        display.to_excel(buf, index=False, engine="openpyxl")
+        st.download_button("📥 Download Rankings", buf.getvalue(),
+                           f"smallcap_rankings_{ranking_mode.lower()}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-# ═══════════════════════════════════════════
-# TAB 2: FUND DEEP-DIVE
-# ═══════════════════════════════════════════
-with tab_fund:
-    fund_list = df.sort_values("Rank")["Fund"].tolist()
-    selected = st.selectbox("Pick a fund", fund_list, format_func=short)
+    # ═══════════════════════════════════════════
+    # TAB 2: FUND DEEP-DIVE
+    # ═══════════════════════════════════════════
+    with tab_fund:
+        fund_list = df.sort_values("Rank")["Fund"].tolist()
+        selected = st.selectbox("Pick a fund", fund_list, format_func=short)
 
-    r = df[df["Fund"] == selected].iloc[0]
+        r = df[df["Fund"] == selected].iloc[0]
 
-    # ── Header ──
-    st.subheader(f"#{int(r['Rank'])}  {short(selected)}")
+        # ── Header ──
+        st.subheader(f"#{int(r['Rank'])}  {short(selected)}")
 
-    sig_emoji = {"Elite": "🟢", "Strong": "🔵", "Above Avg": "🟡", "Average": "🟠", "Below Avg": "🔴"}
-    st.markdown(f"**Signal:** {sig_emoji.get(r['Signal'], '⚪')} {r['Signal']}  ·  **Score:** {r['Score']:.1f}/100")
+        sig_emoji = {"Elite": "🟢", "Strong": "🔵", "Above Avg": "🟡", "Average": "🟠", "Below Avg": "🔴"}
+        st.markdown(f"**Signal:** {sig_emoji.get(r['Signal'], '⚪')} {r['Signal']}  ·  **Score:** {r['Score']:.1f}/100  ·  **Age:** {r['Track_Record_Years']:.1f} Yrs")
 
-    st.divider()
+        st.divider()
 
-    # ── Key Metrics Grid ──
-    st.markdown("#### Key Metrics")
+        # ── Key Metrics Grid ──
+        st.markdown("#### Key Metrics")
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("6M Return (Momentum)", f"{r['Ret_6M']:.1f}%" if pd.notna(r["Ret_6M"]) else "—")
+        c2.metric("1Y Return (Momentum)", f"{r['Ret_1Y']:.1f}%" if pd.notna(r["Ret_1Y"]) else "—")
+        c3.metric("Rolling 3Y CAGR", f"{r['Roll_3Y_Mean']:.1f}%" if pd.notna(r["Roll_3Y_Mean"]) else "—")
+        c4.metric("Rolling 5Y CAGR", f"{r['Roll_5Y_Mean']:.1f}%" if pd.notna(r["Roll_5Y_Mean"]) else "—")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rolling 3Y CAGR", f"{r['Roll_3Y_Mean']:.1f}%" if pd.notna(r["Roll_3Y_Mean"]) else "—",
-              f"Min {r['Roll_3Y_Min']:.1f}% / Max {r['Roll_3Y_Max']:.1f}%" if pd.notna(r["Roll_3Y_Min"]) else None)
-    c2.metric("Rolling 5Y CAGR", f"{r['Roll_5Y_Mean']:.1f}%" if pd.notna(r["Roll_5Y_Mean"]) else "—",
-              f"Min {r['Roll_5Y_Min']:.1f}% / Max {r['Roll_5Y_Max']:.1f}%" if pd.notna(r["Roll_5Y_Min"]) else None)
-    c3.metric("3Y Win Rate", f"{r['Win_3Y']:.1f}%" if pd.notna(r["Win_3Y"]) else "—",
-              "vs benchmark")
-    c4.metric("5Y Win Rate", f"{r['Win_5Y']:.1f}%" if pd.notna(r["Win_5Y"]) else "—",
-              "vs benchmark")
+        c1, c2, c3, c4 = st.columns(4)
+        dc = r["Down_Cap"]
+        dc_delta = "✓ Below 80" if pd.notna(dc) and dc < 80 else ("Below 100" if pd.notna(dc) and dc < 100 else "Above 100 ⚠")
+        c1.metric("Downside Capture", f"{dc:.0f}%" if pd.notna(dc) else "—", dc_delta)
+        uc = r["Up_Cap"]
+        uc_delta = "✓ Above 100" if pd.notna(uc) and uc > 100 else "Below 100"
+        c2.metric("Upside Capture", f"{uc:.0f}%" if pd.notna(uc) else "—", uc_delta)
+        c3.metric("Sortino Ratio", f"{r['Sortino']:.3f}" if pd.notna(r["Sortino"]) else "—",
+                  f"vs Cat: {r['Sortino_vs_Cat']:+.3f}" if pd.notna(r["Sortino_vs_Cat"]) else None)
+        c4.metric("Max Drawdown (All)", f"{r['Max_DD']:.1f}%" if pd.notna(r["Max_DD"]) else "—")
 
-    c1, c2, c3, c4 = st.columns(4)
-    dc = r["Down_Cap"]
-    dc_delta = "✓ Below 80" if pd.notna(dc) and dc < 80 else ("Below 100" if pd.notna(dc) and dc < 100 else "Above 100 ⚠")
-    c1.metric("Downside Capture", f"{dc:.0f}%" if pd.notna(dc) else "—", dc_delta)
-    uc = r["Up_Cap"]
-    uc_delta = "✓ Above 100" if pd.notna(uc) and uc > 100 else "Below 100"
-    c2.metric("Upside Capture", f"{uc:.0f}%" if pd.notna(uc) else "—", uc_delta)
-    c3.metric("Capture Ratio (U/D)", f"{r['Cap_Ratio']:.2f}" if pd.notna(r["Cap_Ratio"]) else "—",
-              "Above 1.2 is great" if pd.notna(r["Cap_Ratio"]) and r["Cap_Ratio"] > 1.2 else None)
-    c4.metric("1Y Return", f"{r['Ret_1Y']:.1f}%" if pd.notna(r["Ret_1Y"]) else "—")
+        # ── NAV + Drawdown Chart ──
+        st.markdown("#### NAV History & Drawdown")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sortino Ratio", f"{r['Sortino']:.3f}" if pd.notna(r["Sortino"]) else "—",
-              f"vs Cat: {r['Sortino_vs_Cat']:+.3f}" if pd.notna(r["Sortino_vs_Cat"]) else None)
-    c2.metric("Max Drawdown (All)", f"{r['Max_DD']:.1f}%" if pd.notna(r["Max_DD"]) else "—")
-    c3.metric("Max Drawdown (3Y)", f"{r['Max_DD_3Y']:.1f}%" if pd.notna(r["Max_DD_3Y"]) else "—")
-    c4.metric("Calmar Ratio", f"{r['Calmar']:.2f}" if pd.notna(r["Calmar"]) else "—")
+        fund_nav = nav[["Date", selected]].dropna().copy()
+        fund_nav = fund_nav.rename(columns={selected: "NAV"})
+        fund_nav["Peak"] = fund_nav["NAV"].cummax()
+        fund_nav["DD"] = (fund_nav["NAV"] - fund_nav["Peak"]) / fund_nav["Peak"] * 100
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sharpe Ratio", f"{r['Sharpe']:.2f}" if pd.notna(r["Sharpe"]) else "—")
-    c2.metric("Information Ratio", f"{r['Info_Ratio']:.2f}" if pd.notna(r["Info_Ratio"]) else "—")
-    c3.metric("AUM", f"₹{r['AUM']:.0f} Cr" if pd.notna(r["AUM"]) else "—")
-    c4.metric("Expense Ratio", f"{r['ER']:.2f}%" if pd.notna(r["ER"]) else "—")
-
-    st.divider()
-
-    # ── NAV + Drawdown Chart ──
-    st.markdown("#### NAV History & Drawdown")
-
-    fund_nav = nav[["Date", selected]].dropna().copy()
-    fund_nav = fund_nav.rename(columns={selected: "NAV"})
-    fund_nav["Peak"] = fund_nav["NAV"].cummax()
-    fund_nav["DD"] = (fund_nav["NAV"] - fund_nav["Peak"]) / fund_nav["Peak"] * 100
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.06, row_heights=[0.65, 0.35],
-        subplot_titles=("NAV (₹)", "Drawdown (%)"),
-    )
-
-    fig.add_trace(go.Scatter(
-        x=fund_nav["Date"], y=fund_nav["NAV"],
-        fill="tozeroy", fillcolor="rgba(59,130,246,0.07)",
-        line=dict(color="#3b82f6", width=1.5), name="NAV",
-        hovertemplate="%{x|%d %b %Y}<br>₹%{y:.2f}<extra></extra>",
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=fund_nav["Date"], y=fund_nav["DD"],
-        fill="tozeroy", fillcolor="rgba(239,68,68,0.1)",
-        line=dict(color="#ef4444", width=1), name="Drawdown",
-        hovertemplate="%{x|%d %b %Y}<br>%{y:.1f}%<extra></extra>",
-    ), row=2, col=1)
-
-    fig.update_layout(
-        height=450, showlegend=False,
-        margin=dict(l=50, r=20, t=30, b=30),
-        hovermode="x unified",
-    )
-    fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
-    fig.update_yaxes(gridcolor="rgba(0,0,0,0.05)")
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ── Capture Ratio Context ──
-    st.markdown("#### Where does this fund sit?")
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        st.markdown("**Downside vs Upside Capture**")
-        cap_df = df.dropna(subset=["Down_Cap", "Up_Cap"])
-        colors = ["#22c55e" if f == selected else "#94a3b8" for f in cap_df["Fund"]]
-        sizes = [14 if f == selected else 8 for f in cap_df["Fund"]]
-
-        fig = go.Figure()
-        fig.add_hline(y=100, line=dict(color="rgba(0,0,0,0.15)", dash="dash", width=1))
-        fig.add_vline(x=80, line=dict(color="rgba(0,0,0,0.15)", dash="dash", width=1))
-        fig.add_trace(go.Scatter(
-            x=cap_df["Down_Cap"], y=cap_df["Up_Cap"],
-            mode="markers", marker=dict(size=sizes, color=colors),
-            text=[short(f) for f in cap_df["Fund"]],
-            hovertemplate="<b>%{text}</b><br>Down: %{x:.0f}%<br>Up: %{y:.0f}%<extra></extra>",
-        ))
-        fig.update_layout(
-            xaxis_title="Downside Capture %", yaxis_title="Upside Capture %",
-            height=350, margin=dict(l=50, r=20, t=20, b=40), showlegend=False,
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            vertical_spacing=0.06, row_heights=[0.65, 0.35],
+            subplot_titles=("NAV (₹)", "Drawdown (%)"),
         )
+
+        fig.add_trace(go.Scatter(
+            x=fund_nav["Date"], y=fund_nav["NAV"],
+            fill="tozeroy", fillcolor="rgba(59,130,246,0.07)",
+            line=dict(color="#3b82f6", width=1.5), name="NAV",
+            hovertemplate="%{x|%d %b %Y}<br>₹%{y:.2f}<extra></extra>",
+        ), row=1, col=1)
+
+        fig.add_trace(go.Scatter(
+            x=fund_nav["Date"], y=fund_nav["DD"],
+            fill="tozeroy", fillcolor="rgba(239,68,68,0.1)",
+            line=dict(color="#ef4444", width=1), name="Drawdown",
+            hovertemplate="%{x|%d %b %Y}<br>%{y:.1f}%<extra></extra>",
+        ), row=2, col=1)
+
+        fig.update_layout(
+            height=450, showlegend=False,
+            margin=dict(l=50, r=20, t=30, b=30),
+            hovermode="x unified",
+        )
+        fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
+        fig.update_yaxes(gridcolor="rgba(0,0,0,0.05)")
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_b:
-        st.markdown("**Factor Score Profile**")
-        score_map = {
-            "S_R3": "Rolling 3Y", "S_R5": "Rolling 5Y", "S_DC": "Low Down Cap",
-            "S_UC": "High Up Cap", "S_SO": "Sortino", "S_DD": "Low Drawdown",
-            "S_CA": "Calmar", "S_IR": "Info Ratio", "S_ER": "Low Cost",
-        }
-        avail = {k: v for k, v in score_map.items() if pd.notna(r.get(k))}
-        if avail:
-            vals = [r[k] for k in avail]
-            labels = list(avail.values())
-            vals.append(vals[0])
-            labels.append(labels[0])
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=vals, theta=labels, fill="toself",
-                fillcolor="rgba(59,130,246,0.1)",
-                line=dict(color="#3b82f6", width=2),
-                marker=dict(size=5),
-            ))
-            fig.update_layout(
-                polar=dict(radialaxis=dict(range=[0, 100], tickfont=dict(size=10)),
-                           angularaxis=dict(tickfont=dict(size=11))),
-                height=350, margin=dict(l=40, r=40, t=20, b=20), showlegend=False,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    # ── Rolling Return Range ──
-    st.markdown("#### Rolling Return Range vs Peers")
-
-    r3_data = df.dropna(subset=["Roll_3Y_Mean"]).sort_values("Roll_3Y_Mean", ascending=True).tail(15)
-    highlight = [("#3b82f6" if f == selected else "#d1d5db") for f in r3_data["Fund"]]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=[short(f) for f in r3_data["Fund"]],
-        x=r3_data["Roll_3Y_Max"] - r3_data["Roll_3Y_Min"],
-        base=r3_data["Roll_3Y_Min"],
-        orientation="h",
-        marker=dict(color=["rgba(59,130,246,0.15)" if f == selected else "rgba(0,0,0,0.04)"
-                           for f in r3_data["Fund"]]),
-        name="Range",
-        hovertemplate="Min: %{base:.1f}% · Max: %{customdata:.1f}%<extra></extra>",
-        customdata=r3_data["Roll_3Y_Max"],
-    ))
-    fig.add_trace(go.Scatter(
-        y=[short(f) for f in r3_data["Fund"]],
-        x=r3_data["Roll_3Y_Mean"],
-        mode="markers",
-        marker=dict(color=highlight, size=9, symbol="diamond"),
-        name="Mean",
-        hovertemplate="%{x:.1f}%<extra></extra>",
-    ))
-    fig.update_layout(
-        title="Rolling 3Y CAGR — Min / Mean / Max",
-        showlegend=False, height=420, margin=dict(l=50, r=20, t=40, b=30),
-    )
-    fig.update_xaxes(title_text="CAGR (%)")
-    st.plotly_chart(fig, use_container_width=True)
-
-
+if __name__ == "__main__":
+    main()
