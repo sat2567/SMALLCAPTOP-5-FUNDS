@@ -39,9 +39,6 @@ PROVEN = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare at 21.8% — highest single-sector bet of ANY fund (+6.6pp). Retailing 9.4%. Banking +8pp. Betting on India's structural consumption story. Highest PE (39.5x)."},
-    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
-        "Label": "Diversified Multi-Sector",
-        "Detail": "Healthcare 14.8%, autos 8.1%, finance 7.9%, iron & steel 6.9%, banking 7%. Broad-based exposure across manufacturing, healthcare, and financials with no extreme concentration."},
 }
 
 MOMENTUM_INFO = {
@@ -63,9 +60,6 @@ MOMENTUM_INFO = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare 21.8%, Retailing 9.4%, Banking +8pp. Structural consumption conviction."},
-    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
-        "Label": "Diversified Multi-Sector",
-        "Detail": "Healthcare 14.8%, autos 8.1%, iron & steel 6.9%. Balanced across manufacturing and services."},
 }
 
 ALL_INFO = {**PROVEN, **MOMENTUM_INFO}
@@ -149,7 +143,7 @@ def load_sectors():
     df_raw = pd.read_excel("SECTORALLCOATIONSMALLCAP.xlsx")
     d = df_raw.iloc[2:].copy()
     d.columns = ["Fund", "Sector", "Feb_26", "Dec_25", "Sep_25", "Jun_25", "Jan_25",
-                  "c7", "c8", "c9", "c10", "c11"]
+                 "c7", "c8", "c9", "c10", "c11"]
     d = d[["Fund", "Sector", "Feb_26", "Dec_25", "Sep_25", "Jun_25", "Jan_25"]]
     d = d.dropna(subset=["Fund", "Sector"])
     d = d[~d["Fund"].str.contains("Accord", na=False)]
@@ -379,14 +373,8 @@ def main():
             profile_rows = []
             for fund in ALL_QUAL_FUNDS:
                 info_p = ALL_INFO.get(fund, {})
-                tags = []
-                if fund in PROVEN:
-                    tags.append("🏛️ Compounder")
-                if fund in MOMENTUM_INFO:
-                    tags.append("🏎️ Momentum")
                 profile_rows.append({
                     "Fund": short(fund),
-                    "Category": " + ".join(tags),
                     "PE": info_p.get("PE"),
                     "PB": info_p.get("PB"),
                     "Valuation Stance": info_p.get("Stance", ""),
@@ -406,19 +394,9 @@ def main():
                 if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
                 return "background-color:#fecaca;color:#991b1b;"
 
-            def c_cat(val):
-                if "Compounder" in str(val) and "Momentum" in str(val):
-                    return "background-color:#ede9fe;color:#5b21b6;"
-                if "Compounder" in str(val):
-                    return "background-color:#dcfce7;color:#166534;"
-                if "Momentum" in str(val):
-                    return "background-color:#e0f2fe;color:#075985;"
-                return ""
-
             styled_p = (pdf.style
                 .map(c_pe, subset=["PE"])
                 .map(c_pb, subset=["PB"])
-                .map(c_cat, subset=["Category"])
                 .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
                 .set_properties(**{"text-align": "center", "font-size": "13px"})
                 .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
@@ -437,7 +415,7 @@ def main():
             info = ALL_INFO.get(selected, {})
             fd = sector_data[sector_data["Fund"] == selected].copy()
 
-            # Category tag
+            # Category tag for individual fund display
             tags = []
             if selected in PROVEN:
                 tags.append("🏛️ Proven Compounder")
