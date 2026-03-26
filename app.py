@@ -415,21 +415,11 @@ def main():
             info = ALL_INFO.get(selected, {})
             fd = sector_data[sector_data["Fund"] == selected].copy()
 
-            # Category tag for individual fund display
-            tags = []
-            if selected in PROVEN:
-                tags.append("🏛️ Proven Compounder")
-            if selected in MOMENTUM_INFO:
-                tags.append("🏎️ Momentum Leader")
-            cat = " + ".join(tags)
-
             # Header
             st.markdown(f"### {short(selected)}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Category", cat)
-            c2.metric("PE Ratio", f"{info.get('PE', '—')}x")
-            c3.metric("PB Ratio", f"{info.get('PB', '—')}x")
-            c4.metric("Stance", info.get("Stance", "—"))
+            c1, c2 = st.columns(2)
+            c1.metric("PE Ratio", f"{info.get('PE', '—')}x")
+            c2.metric("PB Ratio", f"{info.get('PB', '—')}x")
 
             # Significant sectors only
             fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
@@ -438,31 +428,6 @@ def main():
             if len(fd_sig) == 0:
                 st.warning("No sector data available.")
             else:
-                # ── Line chart: sector flow ──
-                st.markdown("#### Sector allocation over time")
-                top_n = fd_sig.head(8)
-                colors = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6",
-                          "#06b6d4", "#f97316", "#ec4899"]
-
-                fig = go.Figure()
-                for i, (_, row) in enumerate(top_n.iterrows()):
-                    vals = [row[m] if pd.notna(row[m]) else 0 for m in MONTHS]
-                    fig.add_trace(go.Scatter(
-                        x=MONTH_LABELS, y=vals, mode="lines",
-                        name=row["Sector"],
-                        line=dict(width=2.5, color=colors[i % len(colors)]),
-                        hovertemplate="%{y:.1f}%<extra>%{fullData.name}</extra>",
-                    ))
-                fig.update_layout(
-                    height=380, margin=dict(l=50, r=20, t=20, b=40),
-                    yaxis_title="Allocation %", hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
-                                font=dict(size=11)),
-                )
-                fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
-                fig.update_yaxes(gridcolor="rgba(0,0,0,0.05)")
-                st.plotly_chart(fig, use_container_width=True)
-
                 # ── Heatmapped table ──
                 st.markdown("#### Month-by-month breakdown")
                 table_rows = []
@@ -598,31 +563,6 @@ def main():
             fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
             st.plotly_chart(fig, use_container_width=True)
             st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
-
-            # Consensus table
-            def c_dir(val):
-                if "Strong Addition" in str(val): return "background-color:#166534;color:white;font-weight:700;"
-                if "Adding" in str(val): return "background-color:#dcfce7;color:#166534;"
-                if "Strong Reduction" in str(val): return "background-color:#991b1b;color:white;font-weight:700;"
-                if "Trimming" in str(val): return "background-color:#fecaca;color:#991b1b;"
-                return "color:#9ca3af;"
-
-            def c_ch(val):
-                if pd.isna(val): return ""
-                if val > 2: return "color:#16a34a;font-weight:700;"
-                if val > 0: return "color:#16a34a;"
-                if val < -2: return "color:#dc2626;font-weight:700;"
-                if val < 0: return "color:#dc2626;"
-                return ""
-
-            styled = (cdf.style
-                .map(c_dir, subset=["Direction"])
-                .map(c_ch, subset=["Avg 12M Change"])
-                .format(na_rep="—")
-                .set_properties(**{"text-align": "center", "font-size": "13px"})
-                .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
-            )
-            st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
 
             # Cross-fund heatmap
             st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
