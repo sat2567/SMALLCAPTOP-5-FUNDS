@@ -1,6 +1,7 @@
 """
 SmallCap Fund Ranking App
 Dual-Engine Layout: Long-Term Compounders + Short-Term Momentum
+Uses real Nifty 500 TRI historical data as Benchmark
 """
 
 import streamlit as st
@@ -19,7 +20,7 @@ st.set_page_config(page_title="SmallCap Rankings", layout="wide", page_icon="�
 # ─────────────────────────────────────────────
 # DATA LOADING
 # ─────────────────────────────────────────────
-@st.cache_data(show_spinner="Loading fund data...")
+@st.cache_data(show_spinner="Loading fund & benchmark data...")
 def load_data():
     raw = pd.read_excel("smallcapfinalrank.xlsx")
     fund_names = raw.iloc[1, 1:].dropna().tolist()
@@ -31,8 +32,33 @@ def load_data():
     for f in fund_names:
         nav[f] = pd.to_numeric(nav[f], errors="coerce")
 
-    valid = [f for f in fund_names if nav[f].notna().sum() > 252]
-    nav["Benchmark"] = nav[valid].mean(axis=1)
+    # ── Real Nifty 500 TRI Benchmark Integration ──
+    try:
+        # Load and combine the two uploaded benchmark files
+        b1 = pd.read_csv("Nifty 500 TRI Historical Data2.csv")
+        b2 = pd.read_csv("Nifty 500 TRI Historical Data (1).csv")
+        bench = pd.concat([b1, b2], ignore_index=True)
+        
+        # Clean the data
+        bench["Date"] = pd.to_datetime(bench["Date"], format="%d-%m-%Y")
+        bench["Price"] = bench["Price"].astype(str).str.replace(',', '').astype(float)
+        
+        # Sort, remove overlaps, and slice the exact requested date range
+        bench = bench.sort_values("Date").drop_duplicates(subset="Date")
+        bench = bench[(bench["Date"] >= "2008-01-01") & (bench["Date"] <= "2026-03-20")]
+        
+        # Rename and merge into our main NAV dataframe
+        bench = bench[["Date", "Price"]].rename(columns={"Price": "Benchmark"})
+        nav = pd.merge(nav, bench, on="Date", how="left")
+        
+        # Forward fill the benchmark to cover any mismatched market holidays
+        nav["Benchmark"] = nav["Benchmark"].ffill()
+        
+    except Exception as e:
+        # Failsafe: If the CSVs are missing, revert to the Category Average proxy
+        st.sidebar.warning("⚠️ Could not load Nifty 500 files. Using Category Average as Benchmark.")
+        valid = [f for f in fund_names if nav[f].notna().sum() > 252]
+        nav["Benchmark"] = nav[valid].mean(axis=1)
 
     # AUM
     ar = pd.read_excel("smallcap_aum.xlsx")
@@ -68,7 +94,7 @@ def load_data():
 # ─────────────────────────────────────────────
 # METRICS ENGINE
 # ─────────────────────────────────────────────
-@st.cache_data(show_spinner="Computing metrics across all rolling windows...")
+@st.cache_data(show_spinner="Computing metrics against Nifty 500 TRI...")
 def compute_metrics(_nav, fund_names, aum_latest, df_er):
     nav = _nav.copy()
     latest_date = nav["Date"].max()
@@ -135,7 +161,7 @@ def compute_metrics(_nav, fund_names, aum_latest, df_er):
         win_3y = win_rate(daily_fd, bench_daily, 3, 36)
         win_5y = win_rate(daily_fd, bench_daily, 5, 60)
 
-        # ── Capture Ratios ──
+        # ── Capture Ratios (Against Nifty 500) ──
         down_m = b_ret[b_ret < 0]
         up_m = b_ret[b_ret > 0]
         dc = (f_ret.loc[down_m.index].mean() / down_m.mean()) * 100 if len(down_m) > 3 else None
@@ -227,7 +253,6 @@ def rank_dual_engine(df, w_lt, w_st):
     d["S_ER"] = pctrank(d["ER"], asc=False)
 
     def comp_lt(row):
-        # Fund MUST be at least 3 years old to get a Long-Term Score
         if row.get("Track_Record_Years", 0) < 3.0: return np.nan
         tw = ts = 0
         for c, wt in w_lt.items():
@@ -242,10 +267,9 @@ def rank_dual_engine(df, w_lt, w_st):
     # --- ENGINE 2: SHORT-TERM / MOMENTUM SCORE ---
     d["S_6M"] = pctrank(d["Ret_6M"])
     d["S_1Y"] = pctrank(d["Ret_1Y"])
-    d["S_V1"] = pctrank(d["Vol_1Y"], asc=False) # Lower volatility is better
+    d["S_V1"] = pctrank(d["Vol_1Y"], asc=False) 
 
     def comp_st(row):
-        # Even new funds get this score
         tw = ts = 0
         for c, wt in w_st.items():
             if wt > 0 and pd.notna(row.get(c)):
@@ -256,7 +280,6 @@ def rank_dual_engine(df, w_lt, w_st):
     d["Score_ST"] = d.apply(comp_st, axis=1)
     d["Rank_ST"] = d["Score_ST"].rank(ascending=False, method="min").astype("Int64")
 
-    # Signals
     def get_sig(x):
         if pd.isna(x): return "N/A"
         if x >= 78: return "Elite"
@@ -284,7 +307,7 @@ def main():
     df_raw = compute_metrics(nav, fund_names, aum_latest, df_er)
 
     st.title("📊 SmallCap Fund Rankings: Dual-Engine")
-    st.caption(f"{len(df_raw)} funds · Data through {nav['Date'].max().strftime('%d %b %Y')} · Evaluates both Long-Term Compounders and Short-Term Momentum")
+    st.caption(f"{len(df_raw)} funds · Benchmark: Real Nifty 500 TRI · Data through {nav['Date'].max().strftime('%d %b %Y')}")
 
     # ── Sidebar weights ──
     with st.sidebar:
@@ -294,7 +317,7 @@ def main():
             st.caption("Used to rank established funds.")
             lt_w0 = st.slider("Rolling 3Y CAGR", 0, 30, 15)
             lt_w1 = st.slider("Rolling 5Y CAGR", 0, 30, 15)
-            lt_w2 = st.slider("3Y Win Rate", 0, 20, 5)
+            lt_w2 = st.slider("3Y Win Rate vs Nifty 500", 0, 20, 5)
             lt_w3 = st.slider("Downside Capture", 0, 30, 20)
             lt_w4 = st.slider("Upside Capture", 0, 20, 10)
             lt_w5 = st.slider("Sortino Ratio", 0, 25, 15)
@@ -333,7 +356,6 @@ def main():
                               horizontal=True)
         st.divider()
 
-        # Shared Style Functions
         def color_signal(val):
             colors = {"Elite": "background-color: #dcfce7; color: #166534;", "Strong": "background-color: #e0f2fe; color: #075985;", "Above Avg": "background-color: #fef9c3; color: #854d0e;", "Average": "background-color: #fed7aa; color: #9a3412;", "Below Avg": "background-color: #fecaca; color: #991b1b;"}
             return colors.get(val, "")
@@ -351,7 +373,6 @@ def main():
 
 
         if "Long-Term" in board_type:
-            # Only show funds with a valid Long-Term Rank
             df_view = df[df["Rank_LT"].notna()].sort_values("Rank_LT").copy()
             
             c1, c2, c3 = st.columns(3)
@@ -362,11 +383,11 @@ def main():
             
             disp = df_view[[
                 "Rank_LT", "Fund", "Score_LT", "Signal_LT", "Track_Record_Years",
-                "Roll_3Y_Mean", "Roll_5Y_Mean", "Down_Cap", "Sortino", "Max_DD", "AUM", "ER"
+                "Roll_3Y_Mean", "Roll_5Y_Mean", "Win_3Y", "Down_Cap", "Up_Cap", "Sortino", "Max_DD", "AUM"
             ]].copy()
-            disp.columns = ["Rank", "Fund", "Score", "Signal", "Age (Yrs)", "Roll 3Y%", "Roll 5Y%", "Down Cap%", "Sortino", "Max DD%", "AUM (Cr)", "Exp Ratio%"]
+            disp.columns = ["Rank", "Fund", "Score", "Signal", "Age (Yrs)", "Roll 3Y%", "Roll 5Y%", "Win Rate 3Y%", "Down Cap%", "Up Cap%", "Sortino", "Max DD%", "AUM (Cr)"]
             disp["Fund"] = disp["Fund"].apply(short)
-            disp = disp.round({"Score": 1, "Age (Yrs)": 1, "Roll 3Y%": 1, "Roll 5Y%": 1, "Down Cap%": 0, "Sortino": 2, "Max DD%": 1, "AUM (Cr)": 0, "Exp Ratio%": 2})
+            disp = disp.round({"Score": 1, "Age (Yrs)": 1, "Roll 3Y%": 1, "Roll 5Y%": 1, "Win Rate 3Y%": 1, "Down Cap%": 0, "Up Cap%": 0, "Sortino": 2, "Max DD%": 1, "AUM (Cr)": 0})
             
             styled = disp.style.map(color_signal, subset=["Signal"]).map(color_score, subset=["Score"]).format(na_rep="—") \
                 .set_properties(**{"text-align": "center", "font-size": "13px"}).set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "500"})
@@ -374,7 +395,6 @@ def main():
             st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
 
         else:
-            # Show all funds sorted by Momentum Rank
             df_view = df.sort_values("Rank_ST").copy()
             
             c1, c2, c3 = st.columns(3)
@@ -408,7 +428,6 @@ def main():
 
         st.subheader(f"🔎 {short(selected)}")
         
-        # Dual Score Display
         colA, colB, colC = st.columns(3)
         with colA:
             st.markdown(f"**Age:** {r['Track_Record_Years']:.1f} Years")
@@ -427,27 +446,35 @@ def main():
         c3.metric("Rolling 3Y CAGR", f"{r['Roll_3Y_Mean']:.1f}%" if pd.notna(r["Roll_3Y_Mean"]) else "—")
         c4.metric("Rolling 5Y CAGR", f"{r['Roll_5Y_Mean']:.1f}%" if pd.notna(r["Roll_5Y_Mean"]) else "—")
 
-        st.markdown("#### Risk Profile")
+        st.markdown("#### Risk Profile against Nifty 500 TRI")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Downside Capture", f"{r['Down_Cap']:.0f}%" if pd.notna(r["Down_Cap"]) else "—")
         c2.metric("Max Drawdown", f"{r['Max_DD']:.1f}%" if pd.notna(r["Max_DD"]) else "—")
-        c3.metric("1Y Volatility", f"{r['Vol_1Y']:.1f}%" if pd.notna(r["Vol_1Y"]) else "—")
+        c3.metric("3Y Win Rate", f"{r['Win_3Y']:.1f}%" if pd.notna(r["Win_3Y"]) else "—")
         c4.metric("Sortino Ratio", f"{r['Sortino']:.2f}" if pd.notna(r["Sortino"]) else "—")
 
         st.divider()
 
-        # ── NAV + Drawdown Chart ──
-        st.markdown("#### NAV History & Drawdown")
+        st.markdown("#### NAV vs Benchmark History & Drawdown")
 
-        fund_nav = nav[["Date", selected]].dropna().copy()
+        fund_nav = nav[["Date", selected, "Benchmark"]].dropna(subset=[selected]).copy()
         fund_nav = fund_nav.rename(columns={selected: "NAV"})
+        
+        # Scale benchmark to start at the exact same base value (100) as the Fund NAV for visual comparison
+        if not fund_nav.empty and fund_nav.iloc[0]["Benchmark"] > 0:
+            initial_nav = fund_nav.iloc[0]["NAV"]
+            initial_bench = fund_nav.iloc[0]["Benchmark"]
+            fund_nav["Scaled_Benchmark"] = fund_nav["Benchmark"] * (initial_nav / initial_bench)
+        else:
+            fund_nav["Scaled_Benchmark"] = fund_nav["Benchmark"]
+
         fund_nav["Peak"] = fund_nav["NAV"].cummax()
         fund_nav["DD"] = (fund_nav["NAV"] - fund_nav["Peak"]) / fund_nav["Peak"] * 100
 
         fig = make_subplots(
             rows=2, cols=1, shared_xaxes=True,
             vertical_spacing=0.06, row_heights=[0.65, 0.35],
-            subplot_titles=("NAV (₹)", "Drawdown (%)"),
+            subplot_titles=("NAV vs Nifty 500 (Rebased)", "Fund Drawdown (%)"),
         )
 
         fig.add_trace(go.Scatter(
@@ -458,6 +485,12 @@ def main():
         ), row=1, col=1)
 
         fig.add_trace(go.Scatter(
+            x=fund_nav["Date"], y=fund_nav["Scaled_Benchmark"],
+            line=dict(color="#64748b", width=1.5, dash="dot"), name="Nifty 500 Proxy",
+            hovertemplate="Benchmark<extra></extra>",
+        ), row=1, col=1)
+
+        fig.add_trace(go.Scatter(
             x=fund_nav["Date"], y=fund_nav["DD"],
             fill="tozeroy", fillcolor="rgba(239,68,68,0.1)",
             line=dict(color="#ef4444", width=1), name="Drawdown",
@@ -465,7 +498,8 @@ def main():
         ), row=2, col=1)
 
         fig.update_layout(
-            height=450, showlegend=False,
+            height=450, showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             margin=dict(l=50, r=20, t=30, b=30),
             hovermode="x unified",
         )
