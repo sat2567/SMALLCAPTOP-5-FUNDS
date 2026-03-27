@@ -318,22 +318,19 @@ def main():
             st.warning("No funds qualify for this engine.")
         else:
             disp = target.sort_values("Rank").copy()
-            
-            # Keep original name for info lookup
-            disp["Orig_Fund"] = disp["Fund"]
 
             if "Established" in view:
-                cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "AUM", "Orig_Fund"]
-                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "AUM (Cr)", "Orig_Fund"]
+                cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "AUM"]
+                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "AUM (Cr)"]
             else:
-                cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM", "Orig_Fund"]
-                names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)", "Orig_Fund"]
+                cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM"]
+                names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)"]
 
             disp = disp[cols].copy()
             disp.columns = names
             disp["Fund"] = disp["Fund"].apply(short)
 
-            num_cols = [c for c in names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down", "Orig_Fund")]
+            num_cols = [c for c in names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down")]
 
             def c_dc(val):
                 if pd.isna(val): return ""
@@ -355,7 +352,7 @@ def main():
                 if val > 1.0: return "color:#ca8a04;"
                 return "background-color:#fecaca;color:#991b1b;"
 
-            styled = (disp.drop(columns=["Orig_Fund"]).style
+            styled = (disp.style
                 .background_gradient(subset=["Score"], cmap="RdYlGn")
                 .map(c_dc, subset=["Down Cap%"])
                 .map(c_uc, subset=["Up Cap%"])
@@ -366,40 +363,10 @@ def main():
                 .format("{:.0f}", subset=["AUM (Cr)"])
                 .format(na_rep="—")
             )
+            st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
 
-            # --- TWO COLUMN LAYOUT ---
-            col_table, col_info = st.columns([7, 3])
-            
-            with col_table:
-                st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
-                if "Established" in view:
-                    st.caption("Benchmark: BSE SmallCap TRI  ·  Upside/Downside Capture measured against benchmark  ·  Only funds with 3+ years track record")
-            
-            with col_info:
-                st.markdown(f"#### Fund Strategies ({'Momentum' if 'Momentum' in view else 'Established'})")
-                
-                st.markdown("<div style='height: 560px; overflow-y: auto; padding-right: 10px;'>", unsafe_allow_html=True)
-                
-                # Iterate and display info if it exists
-                funds_displayed = 0
-                for _, row in disp.iterrows():
-                    orig_name = row["Orig_Fund"]
-                    short_name = row["Fund"]
-                    
-                    # Fetch from our qualitative dictionaries
-                    info = ALL_INFO.get(orig_name, {})
-                    
-                    if info:
-                        st.markdown(f"**{short_name}**")
-                        st.caption(f"🛡️ **Stance:** {info.get('Label', '—')}")
-                        st.markdown(f"<p style='font-size: 13.5px; margin-top: -10px;'>{info.get('Detail', '—')}</p>", unsafe_allow_html=True)
-                        st.markdown("---")
-                        funds_displayed += 1
-                
-                if funds_displayed == 0:
-                    st.info("No qualitative strategy descriptions available for the filtered list of funds yet.")
-                    
-                st.markdown("</div>", unsafe_allow_html=True)
+            if "Established" in view:
+                st.caption("Benchmark: BSE SmallCap TRI  ·  Upside/Downside Capture measured against benchmark  ·  Only funds with 3+ years track record")
 
     # ═══════════════════════════════════
     # TAB 2: FUND SECTOR FLOW
