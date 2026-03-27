@@ -39,6 +39,9 @@ PROVEN = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare at 21.8% — highest single-sector bet of ANY fund (+6.6pp). Retailing 9.4%. Banking +8pp. Betting on India's structural consumption story. Highest PE (39.5x)."},
+    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
+        "Label": "Diversified Multi-Sector",
+        "Detail": "Healthcare 14.8%, autos 8.1%, finance 7.9%, iron & steel 6.9%, banking 7%. Broad-based exposure across manufacturing, healthcare, and financials with no extreme concentration."},
 }
 
 MOMENTUM_INFO = {
@@ -60,6 +63,9 @@ MOMENTUM_INFO = {
     "Invesco India Smallcap Fund-Reg(G)": {"PE": 39.47, "PB": 4.24, "Stance": "Ultra-Growth Premium",
         "Label": "Structural Growth — Healthcare + Consumer",
         "Detail": "Healthcare 21.8%, Retailing 9.4%, Banking +8pp. Structural consumption conviction."},
+    "Mahindra Manulife Small Cap Fund-Reg(G)": {"PE": 29.50, "PB": 3.85, "Stance": "Diversified Growth",
+        "Label": "Diversified Multi-Sector",
+        "Detail": "Healthcare 14.8%, autos 8.1%, iron & steel 6.9%. Balanced across manufacturing and services."},
 }
 
 ALL_INFO = {**PROVEN, **MOMENTUM_INFO}
@@ -143,7 +149,7 @@ def load_sectors():
     df_raw = pd.read_excel("SECTORALLCOATIONSMALLCAP.xlsx")
     d = df_raw.iloc[2:].copy()
     d.columns = ["Fund", "Sector", "Feb_26", "Dec_25", "Sep_25", "Jun_25", "Jan_25",
-                 "c7", "c8", "c9", "c10", "c11"]
+                  "c7", "c8", "c9", "c10", "c11"]
     d = d[["Fund", "Sector", "Feb_26", "Dec_25", "Sep_25", "Jun_25", "Jan_25"]]
     d = d.dropna(subset=["Fund", "Sector"])
     d = d[~d["Fund"].str.contains("Accord", na=False)]
@@ -303,7 +309,7 @@ def main():
     # ═══════════════════════════════════
     with tab_quant:
         view = st.radio("Ranking Engine", [
-            "🏛️ Established Compounders",
+            "🏛️ Established Compounders (Funds > 3 Yrs)",
             "🏎️ Momentum Efficiency"
         ], horizontal=True)
 
@@ -316,7 +322,7 @@ def main():
 
             if "Established" in view:
                 cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "AUM"]
-                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "DD Stress", "AUM (Cr)"]
+                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "AUM (Cr)"]
             else:
                 cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM"]
                 names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)"]
@@ -360,12 +366,19 @@ def main():
             )
             st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
 
+            if "Established" in view:
+                st.caption("Benchmark: BSE SmallCap TRI  ·  Upside/Downside Capture measured against benchmark  ·  Only funds with 3+ years track record")
+                with st.expander("ℹ️ What is Ulcer Index?"):
+                    st.markdown("**Ulcer Index** measures the depth and duration of drawdowns. It's the RMS (root mean square) of all drawdown values — "
+                                "so a fund that stays underwater for a long time or falls very deep gets penalised more than one with short, shallow dips. "
+                                "Lower is better. Unlike Max Drawdown which captures one worst moment, Ulcer Index captures how *painful* the entire ride is.")
+
     # ═══════════════════════════════════
     # TAB 2: FUND SECTOR FLOW
     # ═══════════════════════════════════
     if has_sectors:
         with tab_sector:
-            st.markdown("## Quality Smallcap Funds")
+            st.markdown("## Fund Strategy Profiles & Sector Flow")
 
             # ── Complete Strategy Table ──
             st.markdown("#### All Fund Profiles at a Glance")
@@ -373,8 +386,14 @@ def main():
             profile_rows = []
             for fund in ALL_QUAL_FUNDS:
                 info_p = ALL_INFO.get(fund, {})
+                tags = []
+                if fund in PROVEN:
+                    tags.append("🏛️ Compounder")
+                if fund in MOMENTUM_INFO:
+                    tags.append("🏎️ Momentum")
                 profile_rows.append({
                     "Fund": short(fund),
+                    "Category": " + ".join(tags),
                     "PE": info_p.get("PE"),
                     "PB": info_p.get("PB"),
                     "Valuation Stance": info_p.get("Stance", ""),
@@ -394,9 +413,19 @@ def main():
                 if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
                 return "background-color:#fecaca;color:#991b1b;"
 
+            def c_cat(val):
+                if "Compounder" in str(val) and "Momentum" in str(val):
+                    return "background-color:#ede9fe;color:#5b21b6;"
+                if "Compounder" in str(val):
+                    return "background-color:#dcfce7;color:#166534;"
+                if "Momentum" in str(val):
+                    return "background-color:#e0f2fe;color:#075985;"
+                return ""
+
             styled_p = (pdf.style
                 .map(c_pe, subset=["PE"])
                 .map(c_pb, subset=["PB"])
+                .map(c_cat, subset=["Category"])
                 .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
                 .set_properties(**{"text-align": "center", "font-size": "13px"})
                 .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
@@ -404,6 +433,23 @@ def main():
             st.dataframe(styled_p, use_container_width=True, height=420, hide_index=True)
 
             st.caption("PE color: 🟢 Value (<25x) · 🟡 Growth (25-32x) · 🔴 Premium (>32x)  |  PB color: 🟢 <3x · 🟡 3-4.2x · 🔴 >4.2x")
+
+            with st.expander("ℹ️ What do the Valuation Stances mean?"):
+                st.markdown("""
+| Stance | Meaning |
+|---|---|
+| **Deep Value** | Buying stocks at significant discount to intrinsic value. Lowest PE/PB in the group. Willing to wait years for re-rating. |
+| **GARP** | Growth At Reasonable Price — wants growth but refuses to overpay. Balances earnings momentum with valuation discipline. |
+| **Operating Leverage** | Targeting companies where small revenue increases lead to outsized profit jumps — typically capital-intensive businesses with high fixed costs. |
+| **Concentrated Core** | High-conviction portfolio in 2-3 sector themes. Less diversified, but deeper research per holding. |
+| **Quality / Hedged** | Combines high-quality growth holdings with defensive positions (FMCG, consumer staples) to cushion downside. |
+| **Risk-Adjusted Growth** | Growth-oriented but with strict risk controls — no single sector dominates, wide diversification. |
+| **Balanced Momentum** | Blends value and momentum — rotates between defensive and cyclical sectors based on market regime. |
+| **Terminal Value Premium** | Paying premium valuations for companies with long-duration growth — betting that future earnings justify today's high PE. |
+| **High-Growth Momentum** | Chasing the strongest recent performers. Highest PE/PB, highest churn. Works in bull markets, risky in corrections. |
+| **Ultra-Growth Premium** | Highest conviction growth bets at the most expensive valuations. Concentrated in structural themes like healthcare/consumer. |
+| **Diversified Growth** | Broad exposure across multiple sectors and themes. No extreme bets. Moderate PE/PB. |
+""")
 
             st.divider()
 
@@ -415,11 +461,21 @@ def main():
             info = ALL_INFO.get(selected, {})
             fd = sector_data[sector_data["Fund"] == selected].copy()
 
+            # Category tag
+            tags = []
+            if selected in PROVEN:
+                tags.append("🏛️ Proven Compounder")
+            if selected in MOMENTUM_INFO:
+                tags.append("🏎️ Momentum Leader")
+            cat = " + ".join(tags)
+
             # Header
             st.markdown(f"### {short(selected)}")
-            c1, c2 = st.columns(2)
-            c1.metric("PE Ratio", f"{info.get('PE', '—')}x")
-            c2.metric("PB Ratio", f"{info.get('PB', '—')}x")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Category", cat)
+            c2.metric("PE Ratio", f"{info.get('PE', '—')}x")
+            c3.metric("PB Ratio", f"{info.get('PB', '—')}x")
+            c4.metric("Stance", info.get("Stance", "—"))
 
             # Significant sectors only
             fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
@@ -428,6 +484,31 @@ def main():
             if len(fd_sig) == 0:
                 st.warning("No sector data available.")
             else:
+                # ── Line chart: sector flow ──
+                st.markdown("#### Sector allocation over time")
+                top_n = fd_sig.head(8)
+                colors = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6",
+                          "#06b6d4", "#f97316", "#ec4899"]
+
+                fig = go.Figure()
+                for i, (_, row) in enumerate(top_n.iterrows()):
+                    vals = [row[m] if pd.notna(row[m]) else 0 for m in MONTHS]
+                    fig.add_trace(go.Scatter(
+                        x=MONTH_LABELS, y=vals, mode="lines",
+                        name=row["Sector"],
+                        line=dict(width=2.5, color=colors[i % len(colors)]),
+                        hovertemplate="%{y:.1f}%<extra>%{fullData.name}</extra>",
+                    ))
+                fig.update_layout(
+                    height=380, margin=dict(l=50, r=20, t=20, b=40),
+                    yaxis_title="Allocation %", hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                                font=dict(size=11)),
+                )
+                fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
+                fig.update_yaxes(gridcolor="rgba(0,0,0,0.05)")
+                st.plotly_chart(fig, use_container_width=True)
+
                 # ── Heatmapped table ──
                 st.markdown("#### Month-by-month breakdown")
                 table_rows = []
@@ -563,6 +644,31 @@ def main():
             fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
             st.plotly_chart(fig, use_container_width=True)
             st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
+
+            # Consensus table
+            def c_dir(val):
+                if "Strong Addition" in str(val): return "background-color:#166534;color:white;font-weight:700;"
+                if "Adding" in str(val): return "background-color:#dcfce7;color:#166534;"
+                if "Strong Reduction" in str(val): return "background-color:#991b1b;color:white;font-weight:700;"
+                if "Trimming" in str(val): return "background-color:#fecaca;color:#991b1b;"
+                return "color:#9ca3af;"
+
+            def c_ch(val):
+                if pd.isna(val): return ""
+                if val > 2: return "color:#16a34a;font-weight:700;"
+                if val > 0: return "color:#16a34a;"
+                if val < -2: return "color:#dc2626;font-weight:700;"
+                if val < 0: return "color:#dc2626;"
+                return ""
+
+            styled = (cdf.style
+                .map(c_dir, subset=["Direction"])
+                .map(c_ch, subset=["Avg 12M Change"])
+                .format(na_rep="—")
+                .set_properties(**{"text-align": "center", "font-size": "13px"})
+                .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
+            )
+            st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
 
             # Cross-fund heatmap
             st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
