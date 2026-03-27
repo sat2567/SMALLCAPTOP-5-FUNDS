@@ -1,8 +1,8 @@
 """
 SmallCap Dual-Engine — Quant Rankings + Qualitative Sector Analysis
 Tab 1: Quantitative Rankings (Established Compounders / Momentum Efficiency)
-Tab 2: Fund Sector Flow (dropdown → month-by-month sector changes & cross-fund heatmap)
-Tab 3: Sector Consensus (readings & bar chart)
+Tab 2: Fund Sector Flow (dropdown → month-by-month sector changes)
+Tab 3: Sector Consensus (cross-fund heatmap + readings)
 """
 
 import streamlit as st
@@ -300,11 +300,6 @@ def main():
             "🔬 Fund Sector Flow",
             "🔎 Sector Consensus",
         ])
-        
-        # Calculate global top sectors for heatmap and consensus tabs
-        top_sectors = (sector_data[sector_data["Fund"].isin(ALL_QUAL_FUNDS)]
-                        .groupby("Sector")["Feb_26"].mean()
-                        .sort_values(ascending=False).head(15).index.tolist())
     else:
         tab_quant = st.tabs(["📊 Quantitative Rankings"])[0]
 
@@ -533,45 +528,16 @@ def main():
                 else:
                     st.caption("No major sector shifts (>1.5pp) detected.")
 
-            st.divider()
-
-            # Cross-fund heatmap (Moved from Tab 3)
-            st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
-            heat_sectors = top_sectors[:12]
-            heat_data = []
-            for sector in heat_sectors:
-                row_d = {"Sector": sector}
-                for fund in ALL_QUAL_FUNDS:
-                    fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
-                    val = fd.iloc[0]["Feb_26"] if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]) else 0
-                    row_d[short(fund)] = round(val, 1)
-                heat_data.append(row_d)
-
-            hdf = pd.DataFrame(heat_data)
-            f_short = [short(f) for f in ALL_QUAL_FUNDS]
-            z = hdf[f_short].values
-
-            fig2 = go.Figure(data=go.Heatmap(
-                z=z, x=f_short, y=hdf["Sector"],
-                colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.4, "#93c5fd"],
-                            [0.6, "#3b82f6"], [0.8, "#1d4ed8"], [1.0, "#1e3a5f"]],
-                text=z, texttemplate="%{text:.1f}",
-                textfont=dict(size=11),
-                colorbar=dict(title="Alloc %", thickness=15),
-            ))
-            fig2.update_layout(
-                height=440, margin=dict(l=10, r=10, t=10, b=10),
-                xaxis=dict(tickangle=-45, tickfont=dict(size=11)),
-                yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-
-
         # ═══════════════════════════════════
         # TAB 3: SECTOR CONSENSUS
         # ═══════════════════════════════════
         with tab_consensus:
             st.markdown("## Sector Consensus")
+            st.markdown("Where are all 10 funds converging and diverging?")
+
+            top_sectors = (sector_data[sector_data["Fund"].isin(ALL_QUAL_FUNDS)]
+                            .groupby("Sector")["Feb_26"].mean()
+                            .sort_values(ascending=False).head(15).index.tolist())
 
             cons = []
             for sector in top_sectors:
@@ -623,6 +589,37 @@ def main():
             fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
             st.plotly_chart(fig, use_container_width=True)
             st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
+
+            # Cross-fund heatmap
+            st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
+            heat_sectors = top_sectors[:12]
+            heat_data = []
+            for sector in heat_sectors:
+                row_d = {"Sector": sector}
+                for fund in ALL_QUAL_FUNDS:
+                    fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
+                    val = fd.iloc[0]["Feb_26"] if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]) else 0
+                    row_d[short(fund)] = round(val, 1)
+                heat_data.append(row_d)
+
+            hdf = pd.DataFrame(heat_data)
+            f_short = [short(f) for f in ALL_QUAL_FUNDS]
+            z = hdf[f_short].values
+
+            fig2 = go.Figure(data=go.Heatmap(
+                z=z, x=f_short, y=hdf["Sector"],
+                colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.4, "#93c5fd"],
+                            [0.6, "#3b82f6"], [0.8, "#1d4ed8"], [1.0, "#1e3a5f"]],
+                text=z, texttemplate="%{text:.1f}",
+                textfont=dict(size=11),
+                colorbar=dict(title="Alloc %", thickness=15),
+            ))
+            fig2.update_layout(
+                height=440, margin=dict(l=10, r=10, t=10, b=10),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=11)),
+                yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
 if __name__ == "__main__":
     main()
