@@ -277,7 +277,6 @@ def main():
 
     st.title("🚀 SmallCap Dual-Engine")
 
-
     # Sidebar
     with st.sidebar:
         st.subheader("🏛️ Compounder Weights")
@@ -368,10 +367,6 @@ def main():
 
             if "Established" in view:
                 st.caption("Benchmark: BSE SmallCap TRI  ·  Upside/Downside Capture measured against benchmark  ·  Only funds with 3+ years track record")
-                with st.expander("ℹ️ What is Ulcer Index?"):
-                    st.markdown("**Ulcer Index** measures the depth and duration of drawdowns. It's the RMS (root mean square) of all drawdown values — "
-                                "so a fund that stays underwater for a long time or falls very deep gets penalised more than one with short, shallow dips. "
-                                "Lower is better. Unlike Max Drawdown which captures one worst moment, Ulcer Index captures how *painful* the entire ride is.")
 
     # ═══════════════════════════════════
     # TAB 2: FUND SECTOR FLOW
@@ -591,8 +586,8 @@ def main():
             st.markdown("Where are all 10 funds converging and diverging?")
 
             top_sectors = (sector_data[sector_data["Fund"].isin(ALL_QUAL_FUNDS)]
-                           .groupby("Sector")["Feb_26"].mean()
-                           .sort_values(ascending=False).head(15).index.tolist())
+                            .groupby("Sector")["Feb_26"].mean()
+                            .sort_values(ascending=False).head(15).index.tolist())
 
             cons = []
             for sector in top_sectors:
@@ -700,7 +695,6 @@ def main():
                 yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
             )
             st.plotly_chart(fig2, use_container_width=True)
-
 
 if __name__ == "__main__":
     main()
