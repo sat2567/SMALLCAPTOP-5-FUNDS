@@ -96,7 +96,7 @@ MONTH_LABELS = ["Jan 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Feb 2026"]
 
 def short(f):
     return (f.replace("Small Cap", "SC").replace("Smallcap", "SC")
-             .replace("Fund-Reg(G)", "").replace("Fund(G)", "").strip())
+              .replace("Fund-Reg(G)", "").replace("Fund(G)", "").strip())
 
 
 # ═══════════════════════════════════════════
@@ -381,14 +381,8 @@ def main():
             profile_rows = []
             for fund in ALL_QUAL_FUNDS:
                 info_p = ALL_INFO.get(fund, {})
-                tags = []
-                if fund in PROVEN:
-                    tags.append("🏛️ Compounder")
-                if fund in MOMENTUM_INFO:
-                    tags.append("🏎️ Momentum")
                 profile_rows.append({
                     "Fund": short(fund),
-                    "Category": " + ".join(tags),
                     "PE": info_p.get("PE"),
                     "PB": info_p.get("PB"),
                     "Valuation Stance": info_p.get("Stance", ""),
@@ -408,19 +402,9 @@ def main():
                 if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
                 return "background-color:#fecaca;color:#991b1b;"
 
-            def c_cat(val):
-                if "Compounder" in str(val) and "Momentum" in str(val):
-                    return "background-color:#ede9fe;color:#5b21b6;"
-                if "Compounder" in str(val):
-                    return "background-color:#dcfce7;color:#166534;"
-                if "Momentum" in str(val):
-                    return "background-color:#e0f2fe;color:#075985;"
-                return ""
-
             styled_p = (pdf.style
                 .map(c_pe, subset=["PE"])
                 .map(c_pb, subset=["PB"])
-                .map(c_cat, subset=["Category"])
                 .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
                 .set_properties(**{"text-align": "center", "font-size": "13px"})
                 .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
@@ -456,21 +440,12 @@ def main():
             info = ALL_INFO.get(selected, {})
             fd = sector_data[sector_data["Fund"] == selected].copy()
 
-            # Category tag
-            tags = []
-            if selected in PROVEN:
-                tags.append("🏛️ Proven Compounder")
-            if selected in MOMENTUM_INFO:
-                tags.append("🏎️ Momentum Leader")
-            cat = " + ".join(tags)
-
             # Header
             st.markdown(f"### {short(selected)}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Category", cat)
-            c2.metric("PE Ratio", f"{info.get('PE', '—')}x")
-            c3.metric("PB Ratio", f"{info.get('PB', '—')}x")
-            c4.metric("Stance", info.get("Stance", "—"))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("PE Ratio", f"{info.get('PE', '—')}x")
+            c2.metric("PB Ratio", f"{info.get('PB', '—')}x")
+            c3.metric("Stance", info.get("Stance", "—"))
 
             # Significant sectors only
             fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
