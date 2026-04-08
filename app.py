@@ -1,8 +1,7 @@
 """
-SmallCap Dual-Engine — Quant Rankings + Qualitative Sector Analysis
-Tab 1: Quantitative Rankings (Established Compounders / Momentum Efficiency)
-Tab 2: Fund Sector Flow (dropdown → month-by-month sector changes)
-Tab 3: Sector Consensus (cross-fund heatmap + readings)
+Dual-Engine — SmallCap + LargeCap
+Quant Rankings (Established Compounders / Momentum Efficiency)
+Fund Sector Flow & Sector Consensus (SmallCap only, when sector data is present)
 """
 
 import streamlit as st
@@ -10,18 +9,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import timedelta
-import warnings, io
-
-try:
-    import matplotlib
-except ImportError:
-    pass
+import warnings, os
 
 warnings.filterwarnings("ignore")
-st.set_page_config(page_title="SmallCap Quants", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Fund Quants — SC + LC", layout="wide", page_icon="📊")
 
 # ═══════════════════════════════════════════
-# FUND QUALITATIVE PROFILES
+# FUND QUALITATIVE PROFILES  (SmallCap)
 # ═══════════════════════════════════════════
 PROVEN = {
     "Bandhan Small Cap Fund-Reg(G)": {"PE": 16.78, "PB": 2.07, "Stance": "Deep Value",
@@ -94,19 +88,25 @@ MONTHS = ["Jan_25", "Jun_25", "Sep_25", "Dec_25", "Feb_26"]
 MONTH_LABELS = ["Jan 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Feb 2026"]
 
 
-def short(f):
+def short_sc(f):
     return (f.replace("Small Cap", "SC").replace("Smallcap", "SC")
               .replace("Fund-Reg(G)", "").replace("Fund(G)", "").strip())
 
 
+def short_lc(f):
+    return (f.replace("Large Cap", "LC").replace("Largecap", "LC").replace("Large cap", "LC")
+              .replace("Fund-Reg(G)", "").replace("Fund(G)", "").replace("Fund-Reg(IDCW)", "")
+              .replace("Fund(IDCW)", "").strip())
+
+
 # ═══════════════════════════════════════════
-# DATA LOADING
+# DATA LOADING — SMALLCAP
 # ═══════════════════════════════════════════
 @st.cache_data(show_spinner="Loading SmallCap Data...")
-def load_data():
+def load_sc_data():
     raw = pd.read_excel("smallcapfinalrank.xlsx")
     fund_names = raw.iloc[1, 1:].dropna().tolist()
-    nav = raw.iloc[3:, : len(fund_names) + 1].copy()
+    nav = raw.iloc[3:, :len(fund_names)+1].copy()
     nav.columns = ["Date"] + fund_names
     nav = nav[pd.to_datetime(nav["Date"], errors="coerce").notna()].copy()
     nav["Date"] = pd.to_datetime(nav["Date"])
@@ -144,8 +144,8 @@ def load_data():
     return nav, fund_names, aum_latest, bench_name
 
 
-@st.cache_data(show_spinner="Loading Sector Data...")
-def load_sectors():
+@st.cache_data(show_spinner="Loading SmallCap Sector Data...")
+def load_sc_sectors():
     df_raw = pd.read_excel("SECTORALLCOATIONSMALLCAP.xlsx")
     d = df_raw.iloc[2:].copy()
     d.columns = ["Fund", "Sector", "Feb_26", "Dec_25", "Sep_25", "Jun_25", "Jan_25",
@@ -160,11 +160,45 @@ def load_sectors():
 
 
 # ═══════════════════════════════════════════
-# QUANT METRICS ENGINE
+# DATA LOADING — LARGECAP
 # ═══════════════════════════════════════════
-@st.cache_data(show_spinner="Computing Factors...")
-def compute_all(_nav, fund_names, aum_latest):
-    nav = _nav.copy()
+@st.cache_data(show_spinner="Loading LargeCap Data...")
+def load_lc_data():
+    r1 = pd.read_excel("largecap1.xlsx", header=None)
+    r2 = pd.read_excel("largecap2.xlsx", header=None)
+
+    funds1 = r1.iloc[2, 1:].dropna().tolist()
+    nav1 = r1.iloc[4:, :len(funds1)+1].copy()
+    nav1.columns = ["Date"] + funds1
+    nav1 = nav1[pd.to_datetime(nav1["Date"], errors="coerce").notna()].copy()
+    nav1["Date"] = pd.to_datetime(nav1["Date"])
+
+    funds2 = r2.iloc[2, 1:].dropna().tolist()
+    nav2 = r2.iloc[4:, :len(funds2)+1].copy()
+    nav2.columns = ["Date"] + funds2
+    nav2 = nav2[pd.to_datetime(nav2["Date"], errors="coerce").notna()].copy()
+    nav2["Date"] = pd.to_datetime(nav2["Date"])
+
+    nav = pd.merge(nav1, nav2, on="Date", how="outer").sort_values("Date").reset_index(drop=True)
+    fund_names = funds1 + funds2
+    for f in fund_names:
+        nav[f] = pd.to_numeric(nav[f], errors="coerce")
+
+    exclude_kw = ["Long-Short", "Long Short", "DynaSIF", "Qsif"]
+    fund_names = [f for f in fund_names if not any(kw.lower() in f.lower() for kw in exclude_kw)]
+
+    valid = [f for f in fund_names if nav[f].notna().sum() > 252]
+    nav["Benchmark"] = nav[valid].pct_change().mean(axis=1).add(1).cumprod() * 100
+    bench_name = "LargeCap Index (Proxy)"
+
+    return nav, fund_names, bench_name
+
+
+# ═══════════════════════════════════════════
+# SHARED QUANT ENGINE
+# ═══════════════════════════════════════════
+def compute_all(nav_in, fund_names):
+    nav = nav_in.copy()
     monthly = nav.set_index("Date").resample("ME").last()
     mret = monthly.pct_change().dropna(how="all")
     br = mret["Benchmark"]
@@ -175,16 +209,16 @@ def compute_all(_nav, fund_names, aum_latest):
         if len(fd) < 120:
             continue
 
-        fr = mret[fund].dropna()
+        fr = mret[fund].dropna() if fund in mret.columns else pd.Series(dtype=float)
         ci = fr.index.intersection(br.dropna().index)
         if len(ci) < 6:
             continue
         fr, brc = fr.loc[ci], br.loc[ci]
 
         mn = fd.set_index("Date")[fund].resample("ME").last().dropna()
-        cagrs_5y = [((mn.iloc[i] / mn.iloc[i - 60]) ** (1 / 5) - 1) * 100 for i in range(60, len(mn))]
+        cagrs_5y = [((mn.iloc[i] / mn.iloc[i-60])**(1/5)-1)*100 for i in range(60, len(mn)) if mn.iloc[i-60] > 0]
         r5_mean = np.mean(cagrs_5y) if cagrs_5y else None
-        cagrs_3y = [((mn.iloc[i] / mn.iloc[i - 36]) ** (1 / 3) - 1) * 100 for i in range(36, len(mn))]
+        cagrs_3y = [((mn.iloc[i] / mn.iloc[i-36])**(1/3)-1)*100 for i in range(36, len(mn)) if mn.iloc[i-36] > 0]
         r3_mean = np.mean(cagrs_3y) if cagrs_3y else None
 
         up_m = brc[brc > 0]
@@ -195,7 +229,7 @@ def compute_all(_nav, fund_names, aum_latest):
         prices = fd[fund].values
         peaks = np.maximum.accumulate(prices)
         dd_series = (prices - peaks) / peaks
-        ulcer = np.sqrt(np.mean(dd_series ** 2)) * 100
+        ulcer = np.sqrt(np.mean(dd_series**2)) * 100
         max_dd = dd_series.min() * 100
 
         ld = fd.iloc[-1]["Date"]
@@ -210,7 +244,6 @@ def compute_all(_nav, fund_names, aum_latest):
 
         ret_6m = get_ret(180)
         ret_1y = get_ret(365)
-
         mom_6m = ret_6m / np.sqrt(vol) if (vol and vol > 0 and ret_6m is not None) else None
         mom_1y = ret_1y / np.sqrt(vol) if (vol and vol > 0 and ret_1y is not None) else None
 
@@ -223,11 +256,11 @@ def compute_all(_nav, fund_names, aum_latest):
             "Mom_6M_RA": mom_6m, "Mom_1Y_RA": mom_1y,
         })
 
-    return pd.DataFrame(results).merge(aum_latest, on="Fund", how="left")
+    return pd.DataFrame(results)
 
 
 # ═══════════════════════════════════════════
-# RANKING
+# SHARED RANKING ENGINE
 # ═══════════════════════════════════════════
 def pctrank(s, asc=True):
     v = s.notna()
@@ -247,37 +280,319 @@ def rank_funds(df, w_est, w_mom):
         est["S_UC"] = pctrank(est["Up_Cap"])
         est["S_DC"] = pctrank(est["Down_Cap"], False)
         est["S_UI"] = pctrank(est["Ulcer_Index"], False)
-        est["Score"] = (est["S_R3"].fillna(0) * w_est[0] + est["S_R5"].fillna(0) * w_est[1] +
-                        est["S_UC"].fillna(0) * w_est[2] + est["S_DC"].fillna(0) * w_est[3] +
-                        est["S_UI"].fillna(0) * w_est[4]) / sum(w_est)
+        est["Score"] = (est["S_R3"].fillna(0)*w_est[0] + est["S_R5"].fillna(0)*w_est[1] +
+                        est["S_UC"].fillna(0)*w_est[2] + est["S_DC"].fillna(0)*w_est[3] +
+                        est["S_UI"].fillna(0)*w_est[4]) / sum(w_est)
         est["Rank"] = est["Score"].rank(ascending=False, method="min")
 
     mom = df[df["Mom_6M_RA"].notna()].copy()
     if not mom.empty:
         mom["S_M6"] = pctrank(mom["Mom_6M_RA"])
         mom["S_M1"] = pctrank(mom["Mom_1Y_RA"])
-        mom["Score"] = (mom["S_M6"].fillna(0) * w_mom[0] + mom["S_M1"].fillna(0) * w_mom[1]) / sum(w_mom)
+        mom["Score"] = (mom["S_M6"].fillna(0)*w_mom[0] + mom["S_M1"].fillna(0)*w_mom[1]) / sum(w_mom)
         mom["Rank"] = mom["Score"].rank(ascending=False, method="min")
 
     return est, mom
 
 
 # ═══════════════════════════════════════════
+# TABLE STYLING HELPERS
+# ═══════════════════════════════════════════
+def c_dc(val):
+    if pd.isna(val): return ""
+    if val < 50: return "color:#16a34a;font-weight:700;"
+    if val < 80: return "color:#16a34a;"
+    if val < 100: return "color:#ca8a04;"
+    return "color:#dc2626;font-weight:600;"
+
+def c_uc(val):
+    if pd.isna(val): return ""
+    if val > 120: return "color:#16a34a;font-weight:700;"
+    if val > 100: return "color:#16a34a;"
+    return "color:#ca8a04;"
+
+def c_cr(val):
+    if pd.isna(val): return ""
+    if val > 1.3: return "background-color:#dcfce7;color:#166534;font-weight:700;"
+    if val > 1.1: return "background-color:#e0f2fe;color:#075985;"
+    if val > 1.0: return "color:#ca8a04;"
+    return "background-color:#fecaca;color:#991b1b;"
+
+def c_pe(val):
+    if pd.isna(val): return ""
+    if val < 25: return "background-color:#dcfce7;color:#166534;font-weight:600;"
+    if val < 32: return "background-color:#fef9c3;color:#854d0e;"
+    return "background-color:#fecaca;color:#991b1b;font-weight:600;"
+
+def c_pb(val):
+    if pd.isna(val): return ""
+    if val < 3: return "background-color:#dcfce7;color:#166534;font-weight:600;"
+    if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
+    return "background-color:#fecaca;color:#991b1b;"
+
+def c_alloc(val):
+    if pd.isna(val): return ""
+    if val >= 15: return "background-color:#2563eb;color:white;font-weight:700;"
+    if val >= 10: return "background-color:#60a5fa;color:white;"
+    if val >= 7: return "background-color:#93c5fd;"
+    if val >= 4: return "background-color:#bfdbfe;"
+    if val >= 2: return "background-color:#dbeafe;"
+    return ""
+
+def c_trend(val):
+    if "↑↑" in str(val): return "background-color:#166534;color:white;font-weight:700;"
+    if "↑" in str(val): return "background-color:#dcfce7;color:#166534;"
+    if "↓↓" in str(val): return "background-color:#991b1b;color:white;font-weight:700;"
+    if "↓" in str(val): return "background-color:#fecaca;color:#991b1b;"
+    return "color:#9ca3af;"
+
+
+# ═══════════════════════════════════════════
+# RENDER QUANT RANKINGS (shared for SC/LC)
+# ═══════════════════════════════════════════
+def render_quant(est, mom, shortener, has_aum=False):
+    view = st.radio("Ranking Engine", [
+        "🏛️ Established Compounders (Funds > 3 Yrs)",
+        "🏎️ Momentum Efficiency"
+    ], horizontal=True, key=f"engine_{shortener.__name__}")
+
+    target = est if "Established" in view else mom
+
+    if target.empty:
+        st.warning("No funds qualify for this engine.")
+        return
+
+    disp = target.sort_values("Rank").copy()
+
+    if "Established" in view:
+        cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "Max_DD"]
+        names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "Max DD%"]
+        if has_aum and "AUM" in disp.columns:
+            cols.append("AUM"); names.append("AUM (Cr)")
+    else:
+        cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Mom_6M_RA", "Mom_1Y_RA", "Up_Cap", "Down_Cap", "Cap_Ratio"]
+        names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "6M RA", "1Y RA", "Up Cap%", "Down Cap%", "Up/Down"]
+        if has_aum and "AUM" in disp.columns:
+            cols.append("AUM"); names.append("AUM (Cr)")
+
+    avail = [c for c in cols if c in disp.columns]
+    avail_names = [names[cols.index(c)] for c in avail]
+    disp = disp[avail].copy()
+    disp.columns = avail_names
+    disp["Fund"] = disp["Fund"].apply(shortener)
+
+    num_cols = [c for c in avail_names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down")]
+
+    fmt = {c: "{:.1f}" for c in num_cols}
+    fmt["Rank"] = "{:.0f}"
+    fmt["Up/Down"] = "{:.2f}"
+    if "AUM (Cr)" in avail_names:
+        fmt["AUM (Cr)"] = "{:.0f}"
+
+    styled = disp.style.background_gradient(subset=["Score"], cmap="RdYlGn")
+    if "Down Cap%" in avail_names:
+        styled = styled.map(c_dc, subset=["Down Cap%"])
+    if "Up Cap%" in avail_names:
+        styled = styled.map(c_uc, subset=["Up Cap%"])
+    if "Up/Down" in avail_names:
+        styled = styled.map(c_cr, subset=["Up/Down"])
+    styled = styled.format(fmt).format(na_rep="—")
+    st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
+
+
+# ═══════════════════════════════════════════
+# RENDER SMALLCAP SECTOR TABS
+# ═══════════════════════════════════════════
+def render_sc_sector_flow(sector_data):
+    st.markdown("## Fund Strategy Profiles & Sector Flow")
+
+    # ── Profile table ──
+    st.markdown("#### All Fund Profiles at a Glance")
+    profile_rows = []
+    for fund in ALL_QUAL_FUNDS:
+        info_p = ALL_INFO.get(fund, {})
+        profile_rows.append({
+            "Fund": short_sc(fund), "PE": info_p.get("PE"), "PB": info_p.get("PB"),
+            "Valuation Stance": info_p.get("Stance", ""),
+        })
+    pdf = pd.DataFrame(profile_rows)
+    styled_p = (pdf.style.map(c_pe, subset=["PE"]).map(c_pb, subset=["PB"])
+        .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"}))
+    st.dataframe(styled_p, use_container_width=True, height=420, hide_index=True)
+    st.caption("PE color: 🟢 Value (<25x) · 🟡 Growth (25-32x) · 🔴 Premium (>32x)  |  PB color: 🟢 <3x · 🟡 3-4.2x · 🔴 >4.2x")
+
+    with st.expander("ℹ️ What do the Valuation Stances mean?"):
+        st.markdown("""
+| Stance | Meaning |
+|---|---|
+| **Deep Value** | Buying stocks at significant discount to intrinsic value. Lowest PE/PB. |
+| **GARP** | Growth At Reasonable Price — balances earnings momentum with valuation discipline. |
+| **Operating Leverage** | Targeting companies where small revenue increases lead to outsized profit jumps. |
+| **Concentrated Core** | High-conviction in 2-3 sector themes. |
+| **Quality / Hedged** | High-quality growth + defensive positions for downside cushion. |
+| **Risk-Adjusted Growth** | Growth-oriented with strict risk controls, wide diversification. |
+| **Balanced Momentum** | Rotates between defensive and cyclical sectors by market regime. |
+| **Terminal Value Premium** | Pays premium for long-duration growth. |
+| **High-Growth Momentum** | Chasing strongest recent performers. Highest churn. |
+| **Ultra-Growth Premium** | Highest conviction growth bets at expensive valuations. |
+| **Diversified Growth** | Broad exposure, no extreme bets, moderate PE/PB. |
+""")
+
+    st.divider()
+
+    # ── Fund dropdown ──
+    st.markdown("#### Sector Flow — Pick a Fund")
+    selected = st.selectbox("Select Fund", ALL_QUAL_FUNDS, format_func=short_sc)
+    info = ALL_INFO.get(selected, {})
+    fd = sector_data[sector_data["Fund"] == selected].copy()
+
+    st.markdown(f"### {short_sc(selected)}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("PE Ratio", f"{info.get('PE', '—')}x")
+    c2.metric("PB Ratio", f"{info.get('PB', '—')}x")
+    c3.metric("Stance", info.get("Stance", "—"))
+
+    fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
+    fd_sig = fd_sig.sort_values("Feb_26", ascending=False)
+
+    if len(fd_sig) == 0:
+        st.warning("No sector data available.")
+        return
+
+    st.markdown("#### Month-by-month breakdown")
+    table_rows = []
+    for _, row in fd_sig.iterrows():
+        jan, feb = row["Jan_25"], row["Feb_26"]
+        if pd.notna(jan) and pd.notna(feb):
+            diff = feb - jan
+            if diff > 3: trend = f"↑↑ +{diff:.1f}pp"
+            elif diff > 1: trend = f"↑ +{diff:.1f}pp"
+            elif diff < -3: trend = f"↓↓ {diff:.1f}pp"
+            elif diff < -1: trend = f"↓ {diff:.1f}pp"
+            else: trend = f"→ {diff:+.1f}pp"
+        elif pd.notna(feb):
+            trend = "New"
+        else:
+            trend = "—"
+        table_rows.append({
+            "Sector": row["Sector"],
+            "Jan 2025": round(jan, 1) if pd.notna(jan) else None,
+            "Jun 2025": round(row["Jun_25"], 1) if pd.notna(row["Jun_25"]) else None,
+            "Sep 2025": round(row["Sep_25"], 1) if pd.notna(row["Sep_25"]) else None,
+            "Dec 2025": round(row["Dec_25"], 1) if pd.notna(row["Dec_25"]) else None,
+            "Feb 2026": round(feb, 1) if pd.notna(feb) else None,
+            "12M Trend": trend,
+        })
+    tdf = pd.DataFrame(table_rows)
+    alloc_cols = ["Jan 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Feb 2026"]
+    styled = (tdf.style.map(c_alloc, subset=alloc_cols).map(c_trend, subset=["12M Trend"])
+        .format(na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
+        .set_properties(subset=["12M Trend"], **{"font-weight": "600"}))
+    st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
+
+    st.markdown("#### Biggest moves (Jan 2025 → Feb 2026)")
+    moves = []
+    for _, row in fd_sig.iterrows():
+        if pd.notna(row["Jan_25"]) and pd.notna(row["Feb_26"]):
+            diff = row["Feb_26"] - row["Jan_25"]
+            if abs(diff) > 1.5:
+                moves.append((row["Sector"], diff, row["Feb_26"]))
+    moves.sort(key=lambda x: -abs(x[1]))
+    if moves:
+        cols = st.columns(min(len(moves), 5))
+        for i, (sector, diff, current) in enumerate(moves[:5]):
+            with cols[i]:
+                st.metric(sector, f"{current:.1f}%", f"{'+' if diff > 0 else ''}{diff:.1f}pp")
+    else:
+        st.caption("No major sector shifts (>1.5pp) detected.")
+
+
+def render_sc_consensus(sector_data):
+    st.markdown("## Sector Consensus")
+    st.markdown("Where are all 10 funds converging and diverging?")
+
+    top_sectors = (sector_data[sector_data["Fund"].isin(ALL_QUAL_FUNDS)]
+                    .groupby("Sector")["Feb_26"].mean()
+                    .sort_values(ascending=False).head(15).index.tolist())
+
+    cons = []
+    for sector in top_sectors:
+        allocs, changes = [], []
+        cnt = 0
+        for fund in ALL_QUAL_FUNDS:
+            fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
+            if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]):
+                allocs.append(fd.iloc[0]["Feb_26"]); cnt += 1
+                if pd.notna(fd.iloc[0]["Jan_25"]):
+                    changes.append(fd.iloc[0]["Feb_26"] - fd.iloc[0]["Jan_25"])
+        avg_a = np.mean(allocs) if allocs else 0
+        avg_c = np.mean(changes) if changes else 0
+        if avg_c > 2: direction = "Strong Addition ↑↑"
+        elif avg_c > 0.5: direction = "Adding ↑"
+        elif avg_c < -2: direction = "Strong Reduction ↓↓"
+        elif avg_c < -0.5: direction = "Trimming ↓"
+        else: direction = "Stable →"
+        cons.append({"Sector": sector, "Avg Alloc%": round(avg_a, 1), "Funds": cnt,
+                      "Avg 12M Change": round(avg_c, 1), "Direction": direction})
+
+    cdf = pd.DataFrame(cons)
+    cdf_s = cdf.sort_values("Avg Alloc%", ascending=True)
+    bar_colors = []
+    for _, r in cdf_s.iterrows():
+        ch = r["Avg 12M Change"]
+        if ch > 2: bar_colors.append("#22c55e")
+        elif ch > 0.5: bar_colors.append("#86efac")
+        elif ch < -2: bar_colors.append("#ef4444")
+        elif ch < -0.5: bar_colors.append("#fca5a5")
+        else: bar_colors.append("#94a3b8")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=cdf_s["Sector"], x=cdf_s["Avg Alloc%"], orientation="h",
+        marker=dict(color=bar_colors),
+        text=[f"{v:.1f}%" for v in cdf_s["Avg Alloc%"]], textposition="outside"))
+    fig.update_layout(height=420, margin=dict(l=10, r=40, t=10, b=30),
+                      xaxis_title="Avg allocation %", showlegend=False)
+    fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
+
+    # Cross-fund heatmap
+    st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
+    heat_sectors = top_sectors[:12]
+    heat_data = []
+    for sector in heat_sectors:
+        row_d = {"Sector": sector}
+        for fund in ALL_QUAL_FUNDS:
+            fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
+            val = fd.iloc[0]["Feb_26"] if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]) else 0
+            row_d[short_sc(fund)] = round(val, 1)
+        heat_data.append(row_d)
+
+    hdf = pd.DataFrame(heat_data)
+    f_short = [short_sc(f) for f in ALL_QUAL_FUNDS]
+    z = hdf[f_short].values
+
+    fig2 = go.Figure(data=go.Heatmap(
+        z=z, x=f_short, y=hdf["Sector"],
+        colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.4, "#93c5fd"],
+                    [0.6, "#3b82f6"], [0.8, "#1d4ed8"], [1.0, "#1e3a5f"]],
+        text=z, texttemplate="%{text:.1f}", textfont=dict(size=11),
+        colorbar=dict(title="Alloc %", thickness=15)))
+    fig2.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=11)),
+        yaxis=dict(tickfont=dict(size=11), autorange="reversed"))
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+# ═══════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════
 def main():
-    nav, fund_names, aum_latest, b_name = load_data()
-    df_raw = compute_all(nav, fund_names, aum_latest)
-
-    try:
-        sector_data = load_sectors()
-        has_sectors = True
-    except Exception:
-        has_sectors = False
-
-    st.title("🚀 SmallCap Dual-Engine")
-
-    # Sidebar
+    # ── Sidebar weights (shared) ──
     with st.sidebar:
         st.subheader("🏛️ Compounder Weights")
         w_cagr3 = st.slider("3Y Rolling CAGR", 0, 100, 20)
@@ -285,341 +600,79 @@ def main():
         w_up = st.slider("Upside Capture", 0, 100, 15)
         w_down = st.slider("Downside Capture", 0, 100, 25)
         w_ulcer = st.slider("Ulcer Index", 0, 100, 15)
-
         st.divider()
         st.subheader("🏎️ Momentum Weights")
         m6 = st.slider("6M Dampened RA", 0, 100, 50)
         m1 = st.slider("1Y Dampened RA", 0, 100, 50)
 
-    est, mom = rank_funds(df_raw, [w_cagr3, w_cagr5, w_up, w_down, w_ulcer], [m6, m1])
+    w_est = [w_cagr3, w_cagr5, w_up, w_down, w_ulcer]
+    w_mom = [m6, m1]
 
-    # ── Tabs ──
-    if has_sectors:
-        tab_quant, tab_sector, tab_consensus = st.tabs([
-            "📊 Quantitative Rankings",
-            "🔬 Fund Sector Flow",
-            "🔎 Sector Consensus",
-        ])
+    # ── Load whatever data is available ──
+    has_sc = os.path.exists("smallcapfinalrank.xlsx")
+    has_lc = os.path.exists("largecap1.xlsx") and os.path.exists("largecap2.xlsx")
+
+    if has_sc and has_lc:
+        st.title("📊 Dual-Engine — SmallCap + LargeCap")
+    elif has_sc:
+        st.title("🚀 SmallCap Dual-Engine")
+    elif has_lc:
+        st.title("🏦 LargeCap Dual-Engine")
     else:
-        tab_quant = st.tabs(["📊 Quantitative Rankings"])[0]
+        st.error("No data files found. Place smallcapfinalrank.xlsx and/or largecap1.xlsx + largecap2.xlsx in the working directory.")
+        return
 
-    # ═══════════════════════════════════
-    # TAB 1: QUANTITATIVE RANKINGS
-    # ═══════════════════════════════════
-    with tab_quant:
-        view = st.radio("Ranking Engine", [
-            "🏛️ Established Compounders (Funds > 3 Yrs)",
-            "🏎️ Momentum Efficiency"
-        ], horizontal=True)
+    # ── Build top-level tabs ──
+    tab_labels = []
+    if has_sc:
+        tab_labels.append("🚀 SmallCap Rankings")
+    if has_lc:
+        tab_labels.append("🏦 LargeCap Rankings")
 
-        target = est if "Established" in view else mom
+    has_sc_sectors = False
+    if has_sc:
+        try:
+            sc_sector_data = load_sc_sectors()
+            has_sc_sectors = True
+        except Exception:
+            has_sc_sectors = False
+        if has_sc_sectors:
+            tab_labels.append("🔬 SC Sector Flow")
+            tab_labels.append("🔎 SC Sector Consensus")
 
-        if target.empty:
-            st.warning("No funds qualify for this engine.")
-        else:
-            disp = target.sort_values("Rank").copy()
+    tabs = st.tabs(tab_labels)
+    tab_idx = 0
 
-            if "Established" in view:
-                cols = ["Rank", "Fund", "Score", "Roll_3Y", "Roll_5Y", "Up_Cap", "Down_Cap", "Cap_Ratio", "Ulcer_Index", "AUM"]
-                names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "AUM (Cr)"]
-            else:
-                cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Up_Cap", "Down_Cap", "Cap_Ratio", "AUM"]
-                names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "Up Cap%", "Down Cap%", "Up/Down", "AUM (Cr)"]
+    # ── SmallCap Rankings ──
+    if has_sc:
+        with tabs[tab_idx]:
+            sc_nav, sc_funds, sc_aum, sc_bench = load_sc_data()
+            sc_raw = compute_all(sc_nav, sc_funds)
+            sc_raw = sc_raw.merge(sc_aum, on="Fund", how="left")
+            sc_est, sc_mom = rank_funds(sc_raw, w_est, w_mom)
+            st.caption(f"Benchmark: {sc_bench}  ·  {len(sc_funds)} funds  ·  Data through {sc_nav['Date'].max().strftime('%d %b %Y')}")
+            render_quant(sc_est, sc_mom, short_sc, has_aum=True)
+        tab_idx += 1
 
-            disp = disp[cols].copy()
-            disp.columns = names
-            disp["Fund"] = disp["Fund"].apply(short)
+    # ── LargeCap Rankings ──
+    if has_lc:
+        with tabs[tab_idx]:
+            lc_nav, lc_funds, lc_bench = load_lc_data()
+            lc_raw = compute_all(lc_nav, lc_funds)
+            lc_est, lc_mom = rank_funds(lc_raw, w_est, w_mom)
+            st.caption(f"Benchmark: {lc_bench}  ·  {len(lc_funds)} funds  ·  Data through {lc_nav['Date'].max().strftime('%d %b %Y')}")
+            render_quant(lc_est, lc_mom, short_lc, has_aum=False)
+        tab_idx += 1
 
-            num_cols = [c for c in names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down")]
+    # ── SC Sector Flow ──
+    if has_sc_sectors:
+        with tabs[tab_idx]:
+            render_sc_sector_flow(sc_sector_data)
+        tab_idx += 1
 
-            def c_dc(val):
-                if pd.isna(val): return ""
-                if val < 50: return "color:#16a34a;font-weight:700;"
-                if val < 80: return "color:#16a34a;"
-                if val < 100: return "color:#ca8a04;"
-                return "color:#dc2626;font-weight:600;"
+        with tabs[tab_idx]:
+            render_sc_consensus(sc_sector_data)
 
-            def c_uc(val):
-                if pd.isna(val): return ""
-                if val > 120: return "color:#16a34a;font-weight:700;"
-                if val > 100: return "color:#16a34a;"
-                return "color:#ca8a04;"
-
-            def c_cr(val):
-                if pd.isna(val): return ""
-                if val > 1.3: return "background-color:#dcfce7;color:#166534;font-weight:700;"
-                if val > 1.1: return "background-color:#e0f2fe;color:#075985;"
-                if val > 1.0: return "color:#ca8a04;"
-                return "background-color:#fecaca;color:#991b1b;"
-
-            styled = (disp.style
-                .background_gradient(subset=["Score"], cmap="RdYlGn")
-                .map(c_dc, subset=["Down Cap%"])
-                .map(c_uc, subset=["Up Cap%"])
-                .map(c_cr, subset=["Up/Down"])
-                .format("{:.0f}", subset=["Rank"])
-                .format("{:.1f}", subset=num_cols)
-                .format("{:.2f}", subset=["Up/Down"])
-                .format("{:.0f}", subset=["AUM (Cr)"])
-                .format(na_rep="—")
-            )
-            st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
-
-            if "Established" in view:
-                st.caption("Benchmark: BSE SmallCap TRI  ·  Upside/Downside Capture measured against benchmark  ·  Only funds with 3+ years track record")
-
-    # ═══════════════════════════════════
-    # TAB 2: FUND SECTOR FLOW
-    # ═══════════════════════════════════
-    if has_sectors:
-        with tab_sector:
-            st.markdown("## Fund Strategy Profiles & Sector Flow")
-
-            # ── Complete Strategy Table ──
-            st.markdown("#### All Fund Profiles at a Glance")
-
-            profile_rows = []
-            for fund in ALL_QUAL_FUNDS:
-                info_p = ALL_INFO.get(fund, {})
-                profile_rows.append({
-                    "Fund": short(fund),
-                    "PE": info_p.get("PE"),
-                    "PB": info_p.get("PB"),
-                    "Valuation Stance": info_p.get("Stance", ""),
-                })
-
-            pdf = pd.DataFrame(profile_rows)
-
-            def c_pe(val):
-                if pd.isna(val): return ""
-                if val < 25: return "background-color:#dcfce7;color:#166534;font-weight:600;"
-                if val < 32: return "background-color:#fef9c3;color:#854d0e;"
-                return "background-color:#fecaca;color:#991b1b;font-weight:600;"
-
-            def c_pb(val):
-                if pd.isna(val): return ""
-                if val < 3: return "background-color:#dcfce7;color:#166534;font-weight:600;"
-                if val < 4.2: return "background-color:#fef9c3;color:#854d0e;"
-                return "background-color:#fecaca;color:#991b1b;"
-
-            styled_p = (pdf.style
-                .map(c_pe, subset=["PE"])
-                .map(c_pb, subset=["PB"])
-                .format({"PE": "{:.1f}x", "PB": "{:.2f}x"}, na_rep="—")
-                .set_properties(**{"text-align": "center", "font-size": "13px"})
-                .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"})
-            )
-            st.dataframe(styled_p, use_container_width=True, height=420, hide_index=True)
-
-            st.caption("PE color: 🟢 Value (<25x) · 🟡 Growth (25-32x) · 🔴 Premium (>32x)  |  PB color: 🟢 <3x · 🟡 3-4.2x · 🔴 >4.2x")
-
-            with st.expander("ℹ️ What do the Valuation Stances mean?"):
-                st.markdown("""
-| Stance | Meaning |
-|---|---|
-| **Deep Value** | Buying stocks at significant discount to intrinsic value. Lowest PE/PB in the group. Willing to wait years for re-rating. |
-| **GARP** | Growth At Reasonable Price — wants growth but refuses to overpay. Balances earnings momentum with valuation discipline. |
-| **Operating Leverage** | Targeting companies where small revenue increases lead to outsized profit jumps — typically capital-intensive businesses with high fixed costs. |
-| **Concentrated Core** | High-conviction portfolio in 2-3 sector themes. Less diversified, but deeper research per holding. |
-| **Quality / Hedged** | Combines high-quality growth holdings with defensive positions (FMCG, consumer staples) to cushion downside. |
-| **Risk-Adjusted Growth** | Growth-oriented but with strict risk controls — no single sector dominates, wide diversification. |
-| **Balanced Momentum** | Blends value and momentum — rotates between defensive and cyclical sectors based on market regime. |
-| **Terminal Value Premium** | Paying premium valuations for companies with long-duration growth — betting that future earnings justify today's high PE. |
-| **High-Growth Momentum** | Chasing the strongest recent performers. Highest PE/PB, highest churn. Works in bull markets, risky in corrections. |
-| **Ultra-Growth Premium** | Highest conviction growth bets at the most expensive valuations. Concentrated in structural themes like healthcare/consumer. |
-| **Diversified Growth** | Broad exposure across multiple sectors and themes. No extreme bets. Moderate PE/PB. |
-""")
-
-            st.divider()
-
-            # ── Fund Dropdown ──
-            st.markdown("#### Sector Flow — Pick a Fund")
-
-            selected = st.selectbox("Select Fund", ALL_QUAL_FUNDS, format_func=short)
-
-            info = ALL_INFO.get(selected, {})
-            fd = sector_data[sector_data["Fund"] == selected].copy()
-
-            # Header
-            st.markdown(f"### {short(selected)}")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("PE Ratio", f"{info.get('PE', '—')}x")
-            c2.metric("PB Ratio", f"{info.get('PB', '—')}x")
-            c3.metric("Stance", info.get("Stance", "—"))
-
-            # Significant sectors only
-            fd_sig = fd[fd[MONTHS].max(axis=1) >= 1.5].copy()
-            fd_sig = fd_sig.sort_values("Feb_26", ascending=False)
-
-            if len(fd_sig) == 0:
-                st.warning("No sector data available.")
-            else:
-                # ── Heatmapped table ──
-                st.markdown("#### Month-by-month breakdown")
-                table_rows = []
-                for _, row in fd_sig.iterrows():
-                    jan, feb = row["Jan_25"], row["Feb_26"]
-                    if pd.notna(jan) and pd.notna(feb):
-                        diff = feb - jan
-                        if diff > 3: trend = f"↑↑ +{diff:.1f}pp"
-                        elif diff > 1: trend = f"↑ +{diff:.1f}pp"
-                        elif diff < -3: trend = f"↓↓ {diff:.1f}pp"
-                        elif diff < -1: trend = f"↓ {diff:.1f}pp"
-                        else: trend = f"→ {diff:+.1f}pp"
-                    elif pd.notna(feb):
-                        trend = "New"
-                    else:
-                        trend = "—"
-
-                    table_rows.append({
-                        "Sector": row["Sector"],
-                        "Jan 2025": round(jan, 1) if pd.notna(jan) else None,
-                        "Jun 2025": round(row["Jun_25"], 1) if pd.notna(row["Jun_25"]) else None,
-                        "Sep 2025": round(row["Sep_25"], 1) if pd.notna(row["Sep_25"]) else None,
-                        "Dec 2025": round(row["Dec_25"], 1) if pd.notna(row["Dec_25"]) else None,
-                        "Feb 2026": round(feb, 1) if pd.notna(feb) else None,
-                        "12M Trend": trend,
-                    })
-
-                tdf = pd.DataFrame(table_rows)
-
-                def c_alloc(val):
-                    if pd.isna(val): return ""
-                    if val >= 15: return "background-color:#2563eb;color:white;font-weight:700;"
-                    if val >= 10: return "background-color:#60a5fa;color:white;"
-                    if val >= 7: return "background-color:#93c5fd;"
-                    if val >= 4: return "background-color:#bfdbfe;"
-                    if val >= 2: return "background-color:#dbeafe;"
-                    return ""
-
-                def c_trend(val):
-                    if "↑↑" in str(val): return "background-color:#166534;color:white;font-weight:700;"
-                    if "↑" in str(val): return "background-color:#dcfce7;color:#166534;"
-                    if "↓↓" in str(val): return "background-color:#991b1b;color:white;font-weight:700;"
-                    if "↓" in str(val): return "background-color:#fecaca;color:#991b1b;"
-                    return "color:#9ca3af;"
-
-                alloc_cols = ["Jan 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Feb 2026"]
-                styled = (tdf.style
-                    .map(c_alloc, subset=alloc_cols)
-                    .map(c_trend, subset=["12M Trend"])
-                    .format(na_rep="—")
-                    .set_properties(**{"text-align": "center", "font-size": "13px"})
-                    .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
-                    .set_properties(subset=["12M Trend"], **{"font-weight": "600"})
-                )
-                st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
-
-                # ── Biggest moves ──
-                st.markdown("#### Biggest moves (Jan 2025 → Feb 2026)")
-                moves = []
-                for _, row in fd_sig.iterrows():
-                    if pd.notna(row["Jan_25"]) and pd.notna(row["Feb_26"]):
-                        diff = row["Feb_26"] - row["Jan_25"]
-                        if abs(diff) > 1.5:
-                            moves.append((row["Sector"], diff, row["Feb_26"]))
-                moves.sort(key=lambda x: -abs(x[1]))
-
-                if moves:
-                    cols = st.columns(min(len(moves), 5))
-                    for i, (sector, diff, current) in enumerate(moves[:5]):
-                        with cols[i]:
-                            st.metric(sector, f"{current:.1f}%", f"{'+' if diff > 0 else ''}{diff:.1f}pp")
-                else:
-                    st.caption("No major sector shifts (>1.5pp) detected.")
-
-        # ═══════════════════════════════════
-        # TAB 3: SECTOR CONSENSUS
-        # ═══════════════════════════════════
-        with tab_consensus:
-            st.markdown("## Sector Consensus")
-            st.markdown("Where are all 10 funds converging and diverging?")
-
-            top_sectors = (sector_data[sector_data["Fund"].isin(ALL_QUAL_FUNDS)]
-                            .groupby("Sector")["Feb_26"].mean()
-                            .sort_values(ascending=False).head(15).index.tolist())
-
-            cons = []
-            for sector in top_sectors:
-                allocs, changes = [], []
-                cnt = 0
-                for fund in ALL_QUAL_FUNDS:
-                    fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
-                    if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]):
-                        allocs.append(fd.iloc[0]["Feb_26"])
-                        cnt += 1
-                        if pd.notna(fd.iloc[0]["Jan_25"]):
-                            changes.append(fd.iloc[0]["Feb_26"] - fd.iloc[0]["Jan_25"])
-
-                avg_a = np.mean(allocs) if allocs else 0
-                avg_c = np.mean(changes) if changes else 0
-                if avg_c > 2: direction = "Strong Addition ↑↑"
-                elif avg_c > 0.5: direction = "Adding ↑"
-                elif avg_c < -2: direction = "Strong Reduction ↓↓"
-                elif avg_c < -0.5: direction = "Trimming ↓"
-                else: direction = "Stable →"
-
-                cons.append({
-                    "Sector": sector, "Avg Alloc%": round(avg_a, 1), "Funds": cnt,
-                    "Avg 12M Change": round(avg_c, 1), "Direction": direction,
-                })
-
-            cdf = pd.DataFrame(cons)
-
-            # Bar chart
-            cdf_s = cdf.sort_values("Avg Alloc%", ascending=True)
-            bar_colors = []
-            for _, r in cdf_s.iterrows():
-                ch = r["Avg 12M Change"]
-                if ch > 2: bar_colors.append("#22c55e")
-                elif ch > 0.5: bar_colors.append("#86efac")
-                elif ch < -2: bar_colors.append("#ef4444")
-                elif ch < -0.5: bar_colors.append("#fca5a5")
-                else: bar_colors.append("#94a3b8")
-
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                y=cdf_s["Sector"], x=cdf_s["Avg Alloc%"], orientation="h",
-                marker=dict(color=bar_colors),
-                text=[f"{v:.1f}%" for v in cdf_s["Avg Alloc%"]],
-                textposition="outside",
-            ))
-            fig.update_layout(height=420, margin=dict(l=10, r=40, t=10, b=30),
-                              xaxis_title="Avg allocation %", showlegend=False)
-            fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
-
-            # Cross-fund heatmap
-            st.markdown("#### Cross-fund allocation heatmap — Feb 2026")
-            heat_sectors = top_sectors[:12]
-            heat_data = []
-            for sector in heat_sectors:
-                row_d = {"Sector": sector}
-                for fund in ALL_QUAL_FUNDS:
-                    fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
-                    val = fd.iloc[0]["Feb_26"] if len(fd) > 0 and pd.notna(fd.iloc[0]["Feb_26"]) else 0
-                    row_d[short(fund)] = round(val, 1)
-                heat_data.append(row_d)
-
-            hdf = pd.DataFrame(heat_data)
-            f_short = [short(f) for f in ALL_QUAL_FUNDS]
-            z = hdf[f_short].values
-
-            fig2 = go.Figure(data=go.Heatmap(
-                z=z, x=f_short, y=hdf["Sector"],
-                colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.4, "#93c5fd"],
-                            [0.6, "#3b82f6"], [0.8, "#1d4ed8"], [1.0, "#1e3a5f"]],
-                text=z, texttemplate="%{text:.1f}",
-                textfont=dict(size=11),
-                colorbar=dict(title="Alloc %", thickness=15),
-            ))
-            fig2.update_layout(
-                height=440, margin=dict(l=10, r=10, t=10, b=10),
-                xaxis=dict(tickangle=-45, tickfont=dict(size=11)),
-                yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
 
 if __name__ == "__main__":
     main()
