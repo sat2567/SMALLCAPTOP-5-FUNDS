@@ -87,6 +87,33 @@ SECTOR_READINGS = {
 MONTHS = ["Jan_25", "Jun_25", "Sep_25", "Dec_25", "Feb_26"]
 MONTH_LABELS = ["Jan 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Feb 2026"]
 
+# ═══════════════════════════════════════════
+# LARGECAP — FUNDS FOR SECTOR ANALYSIS
+# (from Established Compounder + Momentum rankings)
+# ═══════════════════════════════════════════
+LC_QUAL_FUNDS = [
+    "ICICI Pru Large Cap Fund(G)",
+    "Mahindra Manulife Large Cap Fund-Reg(G)",
+    "Canara Rob Large Cap Fund-Reg(G)",
+    "Mirae Asset Large Cap Fund-Reg(G)",
+    "Edelweiss Large Cap Fund-Reg(G)",
+    "WOC Large Cap Fund-Reg(G)",
+    "Bank of India Large Cap Fund-Reg(G)",
+    "Groww Largecap Fund-Reg(G)",
+    "Invesco India Largecap Fund-Reg(G)",
+    "Bandhan Large Cap Fund-Reg(G)",
+    "Nippon India Large Cap Fund(G)",
+    "Taurus Large Cap Fund-Reg(G)",
+    "SBI Large Cap Fund-Reg(G)",
+    "Bajaj Finserv Large Cap Fund-Reg(G)",
+    "HSBC Large Cap Fund(G)",
+]
+
+LC_MONTHS = ["Apr_25", "May_25", "Jun_25", "Jul_25", "Aug_25", "Sep_25",
+             "Oct_25", "Nov_25", "Dec_25", "Jan_26", "Feb_26", "Mar_26"]
+LC_MONTH_LABELS = ["Apr 2025", "May 2025", "Jun 2025", "Jul 2025", "Aug 2025", "Sep 2025",
+                   "Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"]
+
 
 def short_sc(f):
     return (f.replace("Small Cap", "SC").replace("Smallcap", "SC")
@@ -192,6 +219,28 @@ def load_lc_data():
     bench_name = "LargeCap Index (Proxy)"
 
     return nav, fund_names, bench_name
+
+
+@st.cache_data(show_spinner="Loading LargeCap Sector Data...")
+def load_lc_sectors():
+    df_raw = pd.read_excel("sectorflows.xlsx", header=None)
+    # Row 3 has headers: Scheme Name, Sector, then 12 monthly dates (Mar-26 → Apr-25)
+    dates_raw = df_raw.iloc[3, 2:14].tolist()  # 12 date columns
+    d = df_raw.iloc[4:, :14].copy()
+    col_names = ["Fund", "Sector"] + LC_MONTHS[::-1][:len(dates_raw)]
+    # Dates are Mar-26, Feb-26, Jan-26, Dec-25, Nov-25, Oct-25, Sep-25, Aug-25, Jul-25, Jun-25, May-25, Apr-25
+    d.columns = ["Fund", "Sector",
+                 "Mar_26", "Feb_26", "Jan_26", "Dec_25", "Nov_25", "Oct_25",
+                 "Sep_25", "Aug_25", "Jul_25", "Jun_25", "May_25", "Apr_25"]
+    d = d.dropna(subset=["Fund", "Sector"])
+    d = d[~d["Fund"].str.contains("Accord", na=False)]
+    d = d[d["Sector"] != "Sector"]
+    # Filter to only the qualified funds
+    d = d[d["Fund"].isin(LC_QUAL_FUNDS)]
+    for c in ["Mar_26", "Feb_26", "Jan_26", "Dec_25", "Nov_25", "Oct_25",
+              "Sep_25", "Aug_25", "Jul_25", "Jun_25", "May_25", "Apr_25"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    return d
 
 
 # ═══════════════════════════════════════════
@@ -589,6 +638,178 @@ def render_sc_consensus(sector_data):
 
 
 # ═══════════════════════════════════════════
+# RENDER LARGECAP SECTOR FLOW
+# ═══════════════════════════════════════════
+def render_lc_sector_flow(sector_data):
+    st.markdown("## LargeCap — Fund Sector Flow")
+    st.markdown("Month-by-month sector allocation for top-ranked large-cap funds.")
+
+    selected = st.selectbox("Select Fund", LC_QUAL_FUNDS, format_func=short_lc, key="lc_fund_select")
+    fd = sector_data[sector_data["Fund"] == selected].copy()
+
+    st.markdown(f"### {short_lc(selected)}")
+
+    # Use the latest 5 months that have data for display
+    display_months = ["Apr_25", "Jun_25", "Sep_25", "Dec_25", "Mar_26"]
+    display_labels = ["Apr 2025", "Jun 2025", "Sep 2025", "Dec 2025", "Mar 2026"]
+    # Check which exist with data
+    avail = [m for m in display_months if m in fd.columns and fd[m].notna().any()]
+    if not avail:
+        # fallback: use all available
+        all_m = ["Apr_25", "May_25", "Jun_25", "Jul_25", "Aug_25", "Sep_25",
+                 "Oct_25", "Nov_25", "Dec_25", "Jan_26", "Feb_26", "Mar_26"]
+        avail = [m for m in all_m if m in fd.columns and fd[m].notna().any()]
+
+    if not avail:
+        st.warning("No sector data available for this fund.")
+        return
+
+    latest = avail[-1]
+    earliest = avail[0]
+
+    fd_sig = fd[fd[avail].max(axis=1) >= 1.5].copy()
+    fd_sig = fd_sig.sort_values(latest, ascending=False)
+
+    if len(fd_sig) == 0:
+        st.warning("No significant sector allocations found.")
+        return
+
+    st.markdown("#### Month-by-month breakdown")
+    table_rows = []
+    for _, row in fd_sig.iterrows():
+        first_val, last_val = row[earliest], row[latest]
+        if pd.notna(first_val) and pd.notna(last_val):
+            diff = last_val - first_val
+            if diff > 3: trend = f"↑↑ +{diff:.1f}pp"
+            elif diff > 1: trend = f"↑ +{diff:.1f}pp"
+            elif diff < -3: trend = f"↓↓ {diff:.1f}pp"
+            elif diff < -1: trend = f"↓ {diff:.1f}pp"
+            else: trend = f"→ {diff:+.1f}pp"
+        elif pd.notna(last_val):
+            trend = "New"
+        else:
+            trend = "—"
+
+        r = {"Sector": row["Sector"]}
+        for m in avail:
+            label = m.replace("_", " 20")  # Apr_25 → Apr 2025
+            r[label] = round(row[m], 1) if pd.notna(row[m]) else None
+        r["Trend"] = trend
+        table_rows.append(r)
+
+    tdf = pd.DataFrame(table_rows)
+    alloc_cols = [c for c in tdf.columns if c not in ("Sector", "Trend")]
+    styled = (tdf.style.map(c_alloc, subset=alloc_cols).map(c_trend, subset=["Trend"])
+        .format(na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Sector"], **{"text-align": "left", "font-weight": "600"})
+        .set_properties(subset=["Trend"], **{"font-weight": "600"}))
+    st.dataframe(styled, use_container_width=True, height=500, hide_index=True)
+
+    # Biggest moves
+    st.markdown(f"#### Biggest moves ({earliest.replace('_',' ')} → {latest.replace('_',' ')})")
+    moves = []
+    for _, row in fd_sig.iterrows():
+        if pd.notna(row[earliest]) and pd.notna(row[latest]):
+            diff = row[latest] - row[earliest]
+            if abs(diff) > 1.5:
+                moves.append((row["Sector"], diff, row[latest]))
+    moves.sort(key=lambda x: -abs(x[1]))
+    if moves:
+        cols = st.columns(min(len(moves), 5))
+        for i, (sector, diff, current) in enumerate(moves[:5]):
+            with cols[i]:
+                st.metric(sector, f"{current:.1f}%", f"{'+' if diff > 0 else ''}{diff:.1f}pp")
+    else:
+        st.caption("No major sector shifts (>1.5pp) detected.")
+
+
+def render_lc_consensus(sector_data):
+    st.markdown("## LargeCap — Sector Consensus")
+    st.markdown(f"Where are the {len(LC_QUAL_FUNDS)} selected funds converging and diverging?")
+
+    # Use latest month with data
+    all_m = ["Apr_25", "May_25", "Jun_25", "Jul_25", "Aug_25", "Sep_25",
+             "Oct_25", "Nov_25", "Dec_25", "Jan_26", "Feb_26", "Mar_26"]
+    avail = [m for m in all_m if m in sector_data.columns and sector_data[m].notna().any()]
+    if not avail:
+        st.warning("No sector data available."); return
+    latest = avail[-1]
+    earliest = avail[0]
+
+    top_sectors = (sector_data.groupby("Sector")[latest].mean()
+                    .sort_values(ascending=False).head(15).index.tolist())
+
+    cons = []
+    for sector in top_sectors:
+        allocs, changes = [], []
+        cnt = 0
+        for fund in LC_QUAL_FUNDS:
+            fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
+            if len(fd) > 0 and pd.notna(fd.iloc[0][latest]):
+                allocs.append(fd.iloc[0][latest]); cnt += 1
+                if pd.notna(fd.iloc[0][earliest]):
+                    changes.append(fd.iloc[0][latest] - fd.iloc[0][earliest])
+        avg_a = np.mean(allocs) if allocs else 0
+        avg_c = np.mean(changes) if changes else 0
+        if avg_c > 2: direction = "Strong Addition ↑↑"
+        elif avg_c > 0.5: direction = "Adding ↑"
+        elif avg_c < -2: direction = "Strong Reduction ↓↓"
+        elif avg_c < -0.5: direction = "Trimming ↓"
+        else: direction = "Stable →"
+        cons.append({"Sector": sector, "Avg Alloc%": round(avg_a, 1), "Funds": cnt,
+                      "Avg Change": round(avg_c, 1), "Direction": direction})
+
+    cdf = pd.DataFrame(cons)
+    cdf_s = cdf.sort_values("Avg Alloc%", ascending=True)
+    bar_colors = []
+    for _, r in cdf_s.iterrows():
+        ch = r["Avg Change"]
+        if ch > 2: bar_colors.append("#22c55e")
+        elif ch > 0.5: bar_colors.append("#86efac")
+        elif ch < -2: bar_colors.append("#ef4444")
+        elif ch < -0.5: bar_colors.append("#fca5a5")
+        else: bar_colors.append("#94a3b8")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=cdf_s["Sector"], x=cdf_s["Avg Alloc%"], orientation="h",
+        marker=dict(color=bar_colors),
+        text=[f"{v:.1f}%" for v in cdf_s["Avg Alloc%"]], textposition="outside"))
+    fig.update_layout(height=420, margin=dict(l=10, r=40, t=10, b=30),
+                      xaxis_title="Avg allocation %", showlegend=False)
+    fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("🟢 Funds adding · 🔴 Funds trimming · ⚪ Stable")
+
+    # Cross-fund heatmap
+    st.markdown(f"#### Cross-fund allocation heatmap — {latest.replace('_',' ')}")
+    heat_sectors = top_sectors[:12]
+    heat_data = []
+    for sector in heat_sectors:
+        row_d = {"Sector": sector}
+        for fund in LC_QUAL_FUNDS:
+            fd = sector_data[(sector_data["Fund"] == fund) & (sector_data["Sector"] == sector)]
+            val = fd.iloc[0][latest] if len(fd) > 0 and pd.notna(fd.iloc[0][latest]) else 0
+            row_d[short_lc(fund)] = round(val, 1)
+        heat_data.append(row_d)
+
+    hdf = pd.DataFrame(heat_data)
+    f_short = [short_lc(f) for f in LC_QUAL_FUNDS]
+    z = hdf[f_short].values
+
+    fig2 = go.Figure(data=go.Heatmap(
+        z=z, x=f_short, y=hdf["Sector"],
+        colorscale=[[0, "#f8fafc"], [0.2, "#dbeafe"], [0.4, "#93c5fd"],
+                    [0.6, "#3b82f6"], [0.8, "#1d4ed8"], [1.0, "#1e3a5f"]],
+        text=z, texttemplate="%{text:.1f}", textfont=dict(size=11),
+        colorbar=dict(title="Alloc %", thickness=15)))
+    fig2.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=11)),
+        yaxis=dict(tickfont=dict(size=11), autorange="reversed"))
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+# ═══════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════
 def main():
@@ -619,7 +840,7 @@ def main():
     elif has_lc:
         st.title("🏦 LargeCap Dual-Engine")
     else:
-        st.error("No data files found. Place smallcapfinalrank.xlsx and/or largecap1.xlsx + largecap2.xlsx in the working directory.")
+        st.error("No data files found.")
         return
 
     # ── Build top-level tabs ──
@@ -635,10 +856,21 @@ def main():
             sc_sector_data = load_sc_sectors()
             has_sc_sectors = True
         except Exception:
-            has_sc_sectors = False
+            pass
         if has_sc_sectors:
             tab_labels.append("🔬 SC Sector Flow")
             tab_labels.append("🔎 SC Sector Consensus")
+
+    has_lc_sectors = False
+    if os.path.exists("sectorflows.xlsx"):
+        try:
+            lc_sector_data = load_lc_sectors()
+            has_lc_sectors = len(lc_sector_data) > 0
+        except Exception:
+            pass
+        if has_lc_sectors:
+            tab_labels.append("🔬 LC Sector Flow")
+            tab_labels.append("🔎 LC Sector Consensus")
 
     tabs = st.tabs(tab_labels)
     tab_idx = 0
@@ -664,14 +896,22 @@ def main():
             render_quant(lc_est, lc_mom, short_lc, has_aum=False)
         tab_idx += 1
 
-    # ── SC Sector Flow ──
+    # ── SC Sector Tabs ──
     if has_sc_sectors:
         with tabs[tab_idx]:
             render_sc_sector_flow(sc_sector_data)
         tab_idx += 1
-
         with tabs[tab_idx]:
             render_sc_consensus(sc_sector_data)
+        tab_idx += 1
+
+    # ── LC Sector Tabs ──
+    if has_lc_sectors:
+        with tabs[tab_idx]:
+            render_lc_sector_flow(lc_sector_data)
+        tab_idx += 1
+        with tabs[tab_idx]:
+            render_lc_consensus(lc_sector_data)
 
 
 if __name__ == "__main__":
