@@ -166,7 +166,8 @@ def load_lc_pe():
 
 @st.cache_data(show_spinner="Loading Turnover Data...")
 def load_lc_turnover():
-    return _parse_stacked("portfolio_ratios.xlsx", [(1,"Turnover"),(2,"Liquidity"),(3,"Liquidity_Avg")])
+    # UPDATED: FIXED FILENAME FROM "portfolio_ratios.xlsx" to "portfolio ratios.xlsx"
+    return _parse_stacked("portfolio ratios.xlsx", [(1,"Turnover"),(2,"Liquidity"),(3,"Liquidity_Avg")])
 
 @st.cache_data(show_spinner="Loading Stock Allocations...")
 def load_lc_stocks():
@@ -642,7 +643,8 @@ def main():
 
     # Load enrichment data
     pe=load_lc_pe() if os.path.exists("pe.xlsx") else pd.DataFrame()
-    tr=load_lc_turnover() if os.path.exists("portfolio_ratios.xlsx") else pd.DataFrame()
+    # UPDATED: FIXED FILENAME TO "portfolio ratios.xlsx"
+    tr=load_lc_turnover() if os.path.exists("portfolio ratios.xlsx") else pd.DataFrame()
     stk=load_lc_stocks() if os.path.exists("stockalloacations.xlsx") else pd.DataFrame()
     scs=pd.DataFrame(); lcs=pd.DataFrame()
     if has_sc:
