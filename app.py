@@ -243,9 +243,59 @@ def load_lc_sectors():
     return d
 
 
-# ═══════════════════════════════════════════
-# SHARED QUANT ENGINE
-# ═══════════════════════════════════════════
+@st.cache_data(show_spinner="Loading PE/PBV Data...")
+def load_lc_pe():
+    """Parse stacked multi-fund PE file → tidy DataFrame with harmonic mean PE & PBV."""
+    df = pd.read_excel("pe.xlsx", header=None)
+    records, cur = [], None
+    for _, row in df.iterrows():
+        val = str(row[0])
+        if "Scheme Name:" in val:
+            cur = val.replace("Scheme Name:", "").strip()
+        elif cur:
+            try:
+                dt = pd.to_datetime(row[0])
+                records.append({"Fund": cur, "Date": dt,
+                    "PE_HM": pd.to_numeric(row[2], errors="coerce"),
+                    "PBV_HM": pd.to_numeric(row[4], errors="coerce"),
+                    "DivYield": pd.to_numeric(row[5], errors="coerce"),
+                    "MCAP_Cr": pd.to_numeric(row[6], errors="coerce")})
+            except Exception:
+                pass
+    return pd.DataFrame(records)
+
+
+@st.cache_data(show_spinner="Loading Turnover Data...")
+def load_lc_turnover():
+    """Parse stacked multi-fund portfolio ratios → tidy DataFrame with turnover."""
+    df = pd.read_excel("portfolio_ratios.xlsx", header=None)
+    records, cur = [], None
+    for _, row in df.iterrows():
+        val = str(row[0])
+        if "Scheme Name:" in val:
+            cur = val.replace("Scheme Name:", "").strip()
+        elif cur:
+            try:
+                dt = pd.to_datetime(row[0])
+                records.append({"Fund": cur, "Date": dt,
+                    "Turnover": pd.to_numeric(row[1], errors="coerce")})
+            except Exception:
+                pass
+    return pd.DataFrame(records)
+
+
+@st.cache_data(show_spinner="Loading Stock Allocations...")
+def load_lc_stocks():
+    """Parse stock/issuer allocation file → tidy DataFrame."""
+    df = pd.read_excel("stockalloacations.xlsx", header=None)
+    d = df.iloc[4:, :9].copy()
+    d.columns = ["Fund", "Company", "Asset", "Sector",
+                  "Mar_26", "Feb_26", "Aug_25", "Jan_25", "Jul_24"]
+    d = d.dropna(subset=["Fund", "Company"])
+    d = d[d["Fund"].isin(LC_QUAL_FUNDS)]
+    for c in ["Mar_26", "Feb_26", "Aug_25", "Jan_25", "Jul_24"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    return d
 def compute_all(nav_in, fund_names):
     nav = nav_in.copy()
     monthly = nav.set_index("Date").resample("ME").last()
@@ -418,11 +468,18 @@ def render_quant(est, mom, shortener, has_aum=False):
         names = ["Rank", "Fund", "Score", "3Y CAGR", "5Y CAGR", "Up Cap%", "Down Cap%", "Up/Down", "Ulcer Index", "Max DD%"]
         if has_aum and "AUM" in disp.columns:
             cols.append("AUM"); names.append("AUM (Cr)")
+        # Add PE/PBV/Turnover if available
+        for src, dst in [("PE_HM", "PE (HM)"), ("PBV_HM", "PBV (HM)"), ("Turnover", "Turnover%")]:
+            if src in disp.columns:
+                cols.append(src); names.append(dst)
     else:
         cols = ["Rank", "Fund", "Score", "Ret_6M", "Ret_1Y", "Vol", "Mom_6M_RA", "Mom_1Y_RA", "Up_Cap", "Down_Cap", "Cap_Ratio"]
         names = ["Rank", "Fund", "Score", "6M Ret%", "1Y Ret%", "Vol%", "6M RA", "1Y RA", "Up Cap%", "Down Cap%", "Up/Down"]
         if has_aum and "AUM" in disp.columns:
             cols.append("AUM"); names.append("AUM (Cr)")
+        for src, dst in [("PE_HM", "PE (HM)"), ("Turnover", "Turnover%")]:
+            if src in disp.columns:
+                cols.append(src); names.append(dst)
 
     avail = [c for c in cols if c in disp.columns]
     avail_names = [names[cols.index(c)] for c in avail]
@@ -430,13 +487,19 @@ def render_quant(est, mom, shortener, has_aum=False):
     disp.columns = avail_names
     disp["Fund"] = disp["Fund"].apply(shortener)
 
-    num_cols = [c for c in avail_names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down")]
+    num_cols = [c for c in avail_names if c not in ("Rank", "Fund", "AUM (Cr)", "Up/Down", "PE (HM)", "PBV (HM)", "Turnover%")]
 
     fmt = {c: "{:.1f}" for c in num_cols}
     fmt["Rank"] = "{:.0f}"
     fmt["Up/Down"] = "{:.2f}"
     if "AUM (Cr)" in avail_names:
         fmt["AUM (Cr)"] = "{:.0f}"
+    if "PE (HM)" in avail_names:
+        fmt["PE (HM)"] = "{:.1f}x"
+    if "PBV (HM)" in avail_names:
+        fmt["PBV (HM)"] = "{:.2f}x"
+    if "Turnover%" in avail_names:
+        fmt["Turnover%"] = "{:.0f}"
 
     styled = disp.style.background_gradient(subset=["Score"], cmap="RdYlGn")
     if "Down Cap%" in avail_names:
@@ -445,6 +508,10 @@ def render_quant(est, mom, shortener, has_aum=False):
         styled = styled.map(c_uc, subset=["Up Cap%"])
     if "Up/Down" in avail_names:
         styled = styled.map(c_cr, subset=["Up/Down"])
+    if "PE (HM)" in avail_names:
+        styled = styled.map(c_pe, subset=["PE (HM)"])
+    if "PBV (HM)" in avail_names:
+        styled = styled.map(c_pb, subset=["PBV (HM)"])
     styled = styled.format(fmt).format(na_rep="—")
     st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
 
@@ -810,6 +877,187 @@ def render_lc_consensus(sector_data):
 
 
 # ═══════════════════════════════════════════
+# RENDER LARGECAP PE / VALUATION TIMELINE
+# ═══════════════════════════════════════════
+def render_lc_valuations(pe_data, turnover_data):
+    st.markdown("## LargeCap — PE & Valuation Monitor")
+    st.markdown("Month-by-month PE (Harmonic Mean), PBV, Dividend Yield & Turnover for selected funds.")
+
+    selected = st.selectbox("Select Fund", LC_QUAL_FUNDS, format_func=short_lc, key="lc_val_fund")
+
+    fd_pe = pe_data[pe_data["Fund"] == selected].sort_values("Date", ascending=False).head(12)
+    fd_tr = turnover_data[turnover_data["Fund"] == selected].sort_values("Date", ascending=False).head(12)
+
+    if fd_pe.empty:
+        st.warning("No PE data available for this fund.")
+        return
+
+    st.markdown(f"### {short_lc(selected)}")
+
+    # Latest metrics
+    latest = fd_pe.iloc[0]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("PE (HM)", f"{latest['PE_HM']:.1f}x" if pd.notna(latest['PE_HM']) else "—")
+    c2.metric("PBV (HM)", f"{latest['PBV_HM']:.2f}x" if pd.notna(latest['PBV_HM']) else "—")
+    c3.metric("Div Yield", f"{latest['DivYield']:.2f}%" if pd.notna(latest['DivYield']) else "—")
+    if not fd_tr.empty:
+        c4.metric("Turnover", f"{fd_tr.iloc[0]['Turnover']:.0f}%")
+    else:
+        c4.metric("Turnover", "—")
+
+    # Monthly table
+    st.markdown("#### Monthly trend")
+    rows = []
+    for _, r in fd_pe.iterrows():
+        row = {"Month": r["Date"].strftime("%b %Y"),
+               "PE (HM)": round(r["PE_HM"], 1) if pd.notna(r["PE_HM"]) else None,
+               "PBV (HM)": round(r["PBV_HM"], 2) if pd.notna(r["PBV_HM"]) else None,
+               "Div Yield%": round(r["DivYield"], 2) if pd.notna(r["DivYield"]) else None,
+               "MCAP (Cr)": round(r["MCAP_Cr"], 0) if pd.notna(r["MCAP_Cr"]) else None}
+        # Find matching turnover
+        tr_match = fd_tr[fd_tr["Date"] == r["Date"]]
+        row["Turnover%"] = round(tr_match.iloc[0]["Turnover"], 0) if len(tr_match) > 0 and pd.notna(tr_match.iloc[0]["Turnover"]) else None
+        rows.append(row)
+
+    tdf = pd.DataFrame(rows)
+    styled = (tdf.style
+        .map(c_pe, subset=["PE (HM)"])
+        .format({"PE (HM)": "{:.1f}x", "PBV (HM)": "{:.2f}x", "Div Yield%": "{:.2f}",
+                 "MCAP (Cr)": "{:,.0f}", "Turnover%": "{:.0f}"}, na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Month"], **{"text-align": "left", "font-weight": "600"}))
+    st.dataframe(styled, use_container_width=True, height=450, hide_index=True)
+
+    # PE chart
+    chart_df = fd_pe.sort_values("Date")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_df["Date"], y=chart_df["PE_HM"], mode="lines+markers",
+        name="PE (HM)", line=dict(color="#3b82f6", width=2)))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+        yaxis_title="PE (Harmonic Mean)", xaxis_title="", showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Cross-fund PE comparison
+    st.markdown("#### Cross-fund PE comparison (latest)")
+    comp = []
+    for fund in LC_QUAL_FUNDS:
+        fd = pe_data[pe_data["Fund"] == fund].sort_values("Date", ascending=False)
+        if len(fd) > 0 and pd.notna(fd.iloc[0]["PE_HM"]):
+            tr_f = turnover_data[turnover_data["Fund"] == fund].sort_values("Date", ascending=False)
+            comp.append({
+                "Fund": short_lc(fund),
+                "PE (HM)": round(fd.iloc[0]["PE_HM"], 1),
+                "PBV (HM)": round(fd.iloc[0]["PBV_HM"], 2) if pd.notna(fd.iloc[0]["PBV_HM"]) else None,
+                "Div Yield%": round(fd.iloc[0]["DivYield"], 2) if pd.notna(fd.iloc[0]["DivYield"]) else None,
+                "Turnover%": round(tr_f.iloc[0]["Turnover"], 0) if len(tr_f) > 0 and pd.notna(tr_f.iloc[0]["Turnover"]) else None,
+            })
+    comp_df = pd.DataFrame(comp).sort_values("PE (HM)")
+    styled_c = (comp_df.style
+        .map(c_pe, subset=["PE (HM)"])
+        .map(c_pb, subset=["PBV (HM)"])
+        .format({"PE (HM)": "{:.1f}x", "PBV (HM)": "{:.2f}x", "Div Yield%": "{:.2f}", "Turnover%": "{:.0f}"}, na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Fund"], **{"text-align": "left", "font-weight": "600"}))
+    st.dataframe(styled_c, use_container_width=True, height=550, hide_index=True)
+    st.caption("PE color: 🟢 Value (<25x) · 🟡 Growth (25-32x) · 🔴 Premium (>32x)")
+
+
+# ═══════════════════════════════════════════
+# RENDER LARGECAP STOCK ALLOCATION
+# ═══════════════════════════════════════════
+def render_lc_stocks(stock_data):
+    st.markdown("## LargeCap — Stock Allocation")
+
+    funds_with_data = [f for f in LC_QUAL_FUNDS if f in stock_data["Fund"].unique()]
+    if not funds_with_data:
+        st.warning("No stock data available."); return
+
+    selected = st.selectbox("Select Fund", funds_with_data, format_func=short_lc, key="lc_stock_fund")
+    fd = stock_data[stock_data["Fund"] == selected].copy()
+
+    st.markdown(f"### {short_lc(selected)} — Top Holdings")
+
+    # Determine latest column with data
+    alloc_cols = ["Mar_26", "Feb_26", "Aug_25", "Jan_25", "Jul_24"]
+    latest_col = None
+    for c in alloc_cols:
+        if fd[c].notna().any():
+            latest_col = c; break
+
+    if latest_col is None:
+        st.warning("No allocation data."); return
+
+    fd = fd.sort_values(latest_col, ascending=False)
+
+    # Display table
+    disp_cols_map = {"Mar_26": "Mar 2026", "Feb_26": "Feb 2026", "Aug_25": "Aug 2025",
+                     "Jan_25": "Jan 2025", "Jul_24": "Jul 2024"}
+    avail_alloc = [c for c in alloc_cols if fd[c].notna().any()]
+
+    tdf = fd[["Company", "Sector"] + avail_alloc].copy()
+    tdf.columns = ["Company", "Sector"] + [disp_cols_map[c] for c in avail_alloc]
+
+    # Add trend
+    if len(avail_alloc) >= 2:
+        first_c, last_c = avail_alloc[-1], avail_alloc[0]
+        changes = fd[last_c] - fd[first_c]
+        trends = []
+        for ch in changes:
+            if pd.isna(ch): trends.append("—")
+            elif ch > 1: trends.append(f"↑ +{ch:.1f}pp")
+            elif ch < -1: trends.append(f"↓ {ch:.1f}pp")
+            else: trends.append(f"→ {ch:+.1f}pp")
+        tdf["Trend"] = trends
+
+    # Color the allocation columns
+    alloc_display = [disp_cols_map[c] for c in avail_alloc]
+
+    def c_stock(val):
+        if pd.isna(val): return ""
+        if val >= 8: return "background-color:#1d4ed8;color:white;font-weight:700;"
+        if val >= 5: return "background-color:#3b82f6;color:white;"
+        if val >= 3: return "background-color:#93c5fd;"
+        if val >= 1.5: return "background-color:#dbeafe;"
+        return ""
+
+    styled = (tdf.style
+        .map(c_stock, subset=alloc_display)
+        .format({c: "{:.2f}" for c in alloc_display}, na_rep="—")
+        .set_properties(**{"text-align": "center", "font-size": "13px"})
+        .set_properties(subset=["Company"], **{"text-align": "left", "font-weight": "600"})
+        .set_properties(subset=["Sector"], **{"text-align": "left"}))
+    if "Trend" in tdf.columns:
+        styled = styled.map(c_trend, subset=["Trend"])
+    st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
+
+    # Top 10 bar chart
+    top10 = fd.head(10)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=top10["Company"].iloc[::-1],
+        x=top10[latest_col].iloc[::-1],
+        orientation="h",
+        marker=dict(color="#3b82f6"),
+        text=[f"{v:.1f}%" for v in top10[latest_col].iloc[::-1]],
+        textposition="outside"))
+    fig.update_layout(height=350, margin=dict(l=10, r=40, t=10, b=10),
+        xaxis_title="Allocation %", showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Concentration metrics
+    st.markdown("#### Concentration")
+    top5 = fd.head(5)[latest_col].sum()
+    top10_sum = fd.head(10)[latest_col].sum()
+    top20 = fd.head(20)[latest_col].sum()
+    total_stocks = len(fd[fd[latest_col].notna()])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Top 5", f"{top5:.1f}%")
+    c2.metric("Top 10", f"{top10_sum:.1f}%")
+    c3.metric("Top 20", f"{top20:.1f}%")
+    c4.metric("Total Stocks", f"{total_stocks}")
+
+
+# ═══════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════
 def main():
@@ -843,6 +1091,18 @@ def main():
         st.error("No data files found.")
         return
 
+    # ── Load optional LC enrichment data ──
+    lc_pe_data, lc_tr_data, lc_stock_data = None, None, None
+    has_lc_pe = os.path.exists("pe.xlsx")
+    has_lc_tr = os.path.exists("portfolio_ratios.xlsx")
+    has_lc_stocks = os.path.exists("stockalloacations.xlsx")
+    if has_lc_pe:
+        lc_pe_data = load_lc_pe()
+    if has_lc_tr:
+        lc_tr_data = load_lc_turnover()
+    if has_lc_stocks:
+        lc_stock_data = load_lc_stocks()
+
     # ── Build top-level tabs ──
     tab_labels = []
     if has_sc:
@@ -872,6 +1132,11 @@ def main():
             tab_labels.append("🔬 LC Sector Flow")
             tab_labels.append("🔎 LC Sector Consensus")
 
+    if lc_pe_data is not None:
+        tab_labels.append("📈 LC Valuations")
+    if lc_stock_data is not None and len(lc_stock_data) > 0:
+        tab_labels.append("🏗️ LC Stock Holdings")
+
     tabs = st.tabs(tab_labels)
     tab_idx = 0
 
@@ -886,11 +1151,20 @@ def main():
             render_quant(sc_est, sc_mom, short_sc, has_aum=True)
         tab_idx += 1
 
-    # ── LargeCap Rankings ──
+    # ── LargeCap Rankings (with PE & Turnover merged in) ──
     if has_lc:
         with tabs[tab_idx]:
             lc_nav, lc_funds, lc_bench = load_lc_data()
             lc_raw = compute_all(lc_nav, lc_funds)
+            # Merge latest PE & Turnover into ranking data
+            if lc_pe_data is not None:
+                pe_latest = (lc_pe_data.sort_values("Date", ascending=False)
+                    .groupby("Fund").first().reset_index()[["Fund", "PE_HM", "PBV_HM"]])
+                lc_raw = lc_raw.merge(pe_latest, on="Fund", how="left")
+            if lc_tr_data is not None:
+                tr_latest = (lc_tr_data.sort_values("Date", ascending=False)
+                    .groupby("Fund").first().reset_index()[["Fund", "Turnover"]])
+                lc_raw = lc_raw.merge(tr_latest, on="Fund", how="left")
             lc_est, lc_mom = rank_funds(lc_raw, w_est, w_mom)
             st.caption(f"Benchmark: {lc_bench}  ·  {len(lc_funds)} funds  ·  Data through {lc_nav['Date'].max().strftime('%d %b %Y')}")
             render_quant(lc_est, lc_mom, short_lc, has_aum=False)
@@ -912,6 +1186,18 @@ def main():
         tab_idx += 1
         with tabs[tab_idx]:
             render_lc_consensus(lc_sector_data)
+        tab_idx += 1
+
+    # ── LC Valuations ──
+    if lc_pe_data is not None:
+        with tabs[tab_idx]:
+            render_lc_valuations(lc_pe_data, lc_tr_data if lc_tr_data is not None else pd.DataFrame())
+        tab_idx += 1
+
+    # ── LC Stock Holdings ──
+    if lc_stock_data is not None and len(lc_stock_data) > 0:
+        with tabs[tab_idx]:
+            render_lc_stocks(lc_stock_data)
 
 
 if __name__ == "__main__":
