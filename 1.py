@@ -166,7 +166,7 @@ def load_lc_pe():
 
 @st.cache_data(show_spinner="Loading Turnover Data...")
 def load_lc_turnover():
-    return _parse_stacked("portfolio_ratios.xlsx", [(1,"Turnover")])
+    return _parse_stacked("portfolio_ratios.xlsx", [(1,"Turnover"),(2,"Liquidity"),(3,"Liquidity_Avg")])
 
 @st.cache_data(show_spinner="Loading Stock Allocations...")
 def load_lc_stocks():
@@ -318,26 +318,25 @@ def render_quant(est, mom, shortener, has_aum=False):
         cols =["Rank","Fund","Score","Ret_6M","Ret_1Y","Vol","Mom_6M_RA","Mom_1Y_RA","Up_Cap","Down_Cap","Cap_Ratio"]
         names=["Rank","Fund","Score","6M Ret%","1Y Ret%","Vol%","6M RA","1Y RA","Up Cap%","Down Cap%","Up/Down"]
     if has_aum and "AUM" in disp.columns: cols.append("AUM"); names.append("AUM (Cr)")
-    for src,dst in [("PE_HM","PE (HM)"),("PBV_HM","PBV (HM)"),("Turnover","Turnover%")]:
+    for src,dst in [("PE_HM","PE (HM)"),("Turnover","Turnover%"),("Liquidity","Liquidity (Days)")]:
         if src in disp.columns: cols.append(src); names.append(dst)
     avail = [c for c in cols if c in disp.columns]
     avail_n = [names[cols.index(c)] for c in avail]
     disp = disp[avail].copy(); disp.columns = avail_n
     disp["Fund"] = disp["Fund"].apply(shortener)
-    num_c = [c for c in avail_n if c not in ("Rank","Fund","AUM (Cr)","Up/Down","PE (HM)","PBV (HM)","Turnover%")]
+    num_c = [c for c in avail_n if c not in ("Rank","Fund","AUM (Cr)","Up/Down","PE (HM)","Turnover%","Liquidity (Days)")]
     fmt = {c:"{:.1f}" for c in num_c}
     fmt["Rank"]="{:.0f}"
     if "Up/Down" in avail_n: fmt["Up/Down"]="{:.2f}"
     if "AUM (Cr)" in avail_n: fmt["AUM (Cr)"]="{:.0f}"
     if "PE (HM)" in avail_n: fmt["PE (HM)"]="{:.1f}x"
-    if "PBV (HM)" in avail_n: fmt["PBV (HM)"]="{:.2f}x"
     if "Turnover%" in avail_n: fmt["Turnover%"]="{:.0f}"
+    if "Liquidity (Days)" in avail_n: fmt["Liquidity (Days)"]="{:.2f}"
     styled = disp.style.background_gradient(subset=["Score"], cmap="RdYlGn")
     if "Down Cap%" in avail_n: styled=styled.map(c_dc, subset=["Down Cap%"])
     if "Up Cap%" in avail_n: styled=styled.map(c_uc, subset=["Up Cap%"])
     if "Up/Down" in avail_n: styled=styled.map(c_cr, subset=["Up/Down"])
     if "PE (HM)" in avail_n: styled=styled.map(c_pe, subset=["PE (HM)"])
-    if "PBV (HM)" in avail_n: styled=styled.map(c_pb, subset=["PBV (HM)"])
     if "Turnover%" in avail_n: styled=styled.map(c_turn, subset=["Turnover%"])
     styled = styled.format(fmt).format(na_rep="—")
     st.dataframe(styled, use_container_width=True, height=700, hide_index=True)
@@ -509,7 +508,7 @@ def render_lc_consensus(sd):
 # ═══════════════════════════════════════════
 def render_lc_valuations(pe_data, tr_data):
     st.markdown("## LargeCap — PE & Valuation Monitor")
-    st.markdown("Harmonic Mean PE, PBV, Dividend Yield & Turnover for the **15 selected funds**.")
+    st.markdown("Harmonic Mean PE, Dividend Yield, Turnover & Liquidity for the **15 selected funds**.")
 
     # Cross-fund snapshot
     st.markdown("#### All Selected Funds — Latest Snapshot")
@@ -521,17 +520,17 @@ def render_lc_valuations(pe_data, tr_data):
         ft=tr_data[tr_data["Fund"]==f].sort_values("Date",ascending=False) if len(tr_data)>0 else pd.DataFrame()
         comp.append({"Fund":short_lc(f),
             "PE (HM)":round(r["PE_HM"],1) if pd.notna(r["PE_HM"]) else None,
-            "PBV (HM)":round(r["PBV_HM"],2) if pd.notna(r["PBV_HM"]) else None,
             "Div Yield%":round(r["DivYield"],2) if pd.notna(r["DivYield"]) else None,
             "Wt Avg MCAP (Cr)":round(r["MCAP_Cr"],0) if pd.notna(r["MCAP_Cr"]) else None,
-            "Turnover%":round(ft.iloc[0]["Turnover"],0) if len(ft)>0 and pd.notna(ft.iloc[0]["Turnover"]) else None})
+            "Turnover%":round(ft.iloc[0]["Turnover"],0) if len(ft)>0 and pd.notna(ft.iloc[0]["Turnover"]) else None,
+            "Liquidity (Days)":round(ft.iloc[0]["Liquidity"],2) if len(ft)>0 and pd.notna(ft.iloc[0]["Liquidity"]) else None})
     cdf=pd.DataFrame(comp).sort_values("PE (HM)")
-    st.dataframe(cdf.style.map(c_pe,subset=["PE (HM)"]).map(c_pb,subset=["PBV (HM)"]).map(c_turn,subset=["Turnover%"])
-        .format({"PE (HM)":"{:.1f}x","PBV (HM)":"{:.2f}x","Div Yield%":"{:.2f}","Wt Avg MCAP (Cr)":"{:,.0f}","Turnover%":"{:.0f}"},na_rep="—")
+    st.dataframe(cdf.style.map(c_pe,subset=["PE (HM)"]).map(c_turn,subset=["Turnover%"])
+        .format({"PE (HM)":"{:.1f}x","Div Yield%":"{:.2f}","Wt Avg MCAP (Cr)":"{:,.0f}","Turnover%":"{:.0f}","Liquidity (Days)":"{:.2f}"},na_rep="—")
         .set_properties(**{"text-align":"center","font-size":"13px"})
         .set_properties(subset=["Fund"],**{"text-align":"left","font-weight":"600"}),
         use_container_width=True,height=560,hide_index=True)
-    st.caption("PE: 🟢 <25x · 🟡 25-32x · 🔴 >32x  |  PBV: 🟢 <3x · 🟡 3-4.2x · 🔴 >4.2x  |  Turnover: 🟢 ≤30 · 🟡 ≤60 · 🟠 ≤100 · 🔴 >100")
+    st.caption("PE: 🟢 <25x · 🟡 25-32x · 🔴 >32x  |  Turnover: 🟢 ≤30 · 🟡 ≤60 · 🟠 ≤100 · 🔴 >100")
 
     st.divider()
 
@@ -542,24 +541,25 @@ def render_lc_valuations(pe_data, tr_data):
     ft=tr_data[tr_data["Fund"]==sel].sort_values("Date",ascending=False).head(12) if len(tr_data)>0 else pd.DataFrame()
     if fp.empty: st.warning("No PE data."); return
     la=fp.iloc[0]
+    la_tr=ft.iloc[0] if len(ft)>0 else pd.Series()
     c1,c2,c3,c4=st.columns(4)
     c1.metric("PE (HM)",f"{la['PE_HM']:.1f}x" if pd.notna(la['PE_HM']) else "—")
-    c2.metric("PBV (HM)",f"{la['PBV_HM']:.2f}x" if pd.notna(la['PBV_HM']) else "—")
-    c3.metric("Div Yield",f"{la['DivYield']:.2f}%" if pd.notna(la['DivYield']) else "—")
-    c4.metric("Turnover",f"{ft.iloc[0]['Turnover']:.0f}%" if len(ft)>0 and pd.notna(ft.iloc[0]['Turnover']) else "—")
+    c2.metric("Div Yield",f"{la['DivYield']:.2f}%" if pd.notna(la['DivYield']) else "—")
+    c3.metric("Turnover",f"{la_tr['Turnover']:.0f}%" if len(la_tr)>0 and pd.notna(la_tr.get('Turnover')) else "—")
+    c4.metric("Liquidity",f"{la_tr['Liquidity']:.2f} days" if len(la_tr)>0 and pd.notna(la_tr.get('Liquidity')) else "—")
     rows=[]
     for _,r in fp.iterrows():
         row={"Month":r["Date"].strftime("%b %Y"),
              "PE (HM)":round(r["PE_HM"],1) if pd.notna(r["PE_HM"]) else None,
-             "PBV (HM)":round(r["PBV_HM"],2) if pd.notna(r["PBV_HM"]) else None,
              "Div Yield%":round(r["DivYield"],2) if pd.notna(r["DivYield"]) else None,
              "MCAP (Cr)":round(r["MCAP_Cr"],0) if pd.notna(r["MCAP_Cr"]) else None}
         tm=ft[ft["Date"]==r["Date"]] if len(ft)>0 else pd.DataFrame()
         row["Turnover%"]=round(tm.iloc[0]["Turnover"],0) if len(tm)>0 and pd.notna(tm.iloc[0]["Turnover"]) else None
+        row["Liquidity (Days)"]=round(tm.iloc[0]["Liquidity"],2) if len(tm)>0 and pd.notna(tm.iloc[0]["Liquidity"]) else None
         rows.append(row)
     tdf=pd.DataFrame(rows)
     st.dataframe(tdf.style.map(c_pe,subset=["PE (HM)"])
-        .format({"PE (HM)":"{:.1f}x","PBV (HM)":"{:.2f}x","Div Yield%":"{:.2f}","MCAP (Cr)":"{:,.0f}","Turnover%":"{:.0f}"},na_rep="—")
+        .format({"PE (HM)":"{:.1f}x","Div Yield%":"{:.2f}","MCAP (Cr)":"{:,.0f}","Turnover%":"{:.0f}","Liquidity (Days)":"{:.2f}"},na_rep="—")
         .set_properties(**{"text-align":"center","font-size":"13px"})
         .set_properties(subset=["Month"],**{"text-align":"left","font-weight":"600"}),
         use_container_width=True,height=450,hide_index=True)
@@ -674,10 +674,10 @@ def main():
             lr=compute_all(ln,lf)
             # MERGE PE + TURNOVER INTO RANKING DATA
             if len(pe)>0:
-                pl=pe.sort_values("Date",ascending=False).groupby("Fund").first().reset_index()[["Fund","PE_HM","PBV_HM"]]
+                pl=pe.sort_values("Date",ascending=False).groupby("Fund").first().reset_index()[["Fund","PE_HM"]]
                 lr=lr.merge(pl,on="Fund",how="left")
             if len(tr)>0:
-                trl=tr.sort_values("Date",ascending=False).groupby("Fund").first().reset_index()[["Fund","Turnover"]]
+                trl=tr.sort_values("Date",ascending=False).groupby("Fund").first().reset_index()[["Fund","Turnover","Liquidity"]]
                 lr=lr.merge(trl,on="Fund",how="left")
             le,lm=rank_funds(lr,we,wm)
             st.caption(f"Benchmark: {lb}  ·  {len(lf)} funds  ·  Data through {ln['Date'].max().strftime('%d %b %Y')}")
