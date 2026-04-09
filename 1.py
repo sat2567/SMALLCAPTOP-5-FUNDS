@@ -627,6 +627,10 @@ def main():
         st.divider()
         st.subheader("🏎️ Momentum Weights")
         m6=st.slider("6M Dampened RA",0,100,50); m1=st.slider("1Y Dampened RA",0,100,50)
+        st.divider()
+        if st.button("🔄 Clear Cache & Reload"):
+            st.cache_data.clear()
+            st.rerun()
     we=[w1,w2,w3,w4,w5]; wm=[m6,m1]
 
     has_sc=os.path.exists("smallcapfinalrank.xlsx")
@@ -647,6 +651,15 @@ def main():
     if os.path.exists("sectorflows.xlsx"):
         try: lcs=load_lc_sectors()
         except: pass
+
+    # Show data status
+    with st.expander("📁 Data Sources Loaded", expanded=False):
+        c1,c2,c3=st.columns(3)
+        c1.markdown(f"**NAV**: {'✅ SC' if has_sc else '❌ SC'} · {'✅ LC' if has_lc else '❌ LC'}")
+        c2.markdown(f"**PE**: {'✅ '+str(len(pe))+' rows' if len(pe)>0 else '❌'}  ·  **Turnover/Liquidity**: {'✅ '+str(len(tr))+' rows' if len(tr)>0 else '❌'}")
+        c3.markdown(f"**Sectors**: {'✅ SC' if len(scs)>0 else '❌ SC'} · {'✅ LC' if len(lcs)>0 else '❌ LC'}  ·  **Stocks**: {'✅ '+str(len(stk))+' rows' if len(stk)>0 else '❌'}")
+        if len(tr)>0:
+            st.caption(f"Turnover/Liquidity: {tr['Fund'].nunique()} funds, columns: {[c for c in tr.columns if c not in ('Fund','Date')]}")
 
     # Build tabs
     tl=[]
